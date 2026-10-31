@@ -15,7 +15,7 @@ Local-first. Jeder Rechner hält alle Daten in einer lokalen Datenbank. Ein Serv
  └──────────┬────────────┘        └────────────────────┘        └──────────┬────────────┘
             │ lokal                                                        │ lokal
    Ordner für PDFs und Anhänge  ◄──── Nextcloud (oder anderes Tool) ────►  Ordner
-   Mail-Zugangsdaten im Schlüsselbund des Betriebssystems
+   Token und SMTP-Passwort verschlüsselt in der lokalen Datenbank
 ```
 
 ## Komponenten
@@ -75,7 +75,8 @@ Umgesetzt in `core/src/mcp.rs`, Einstellungen in der App unter „Einstellungen,
 
 - **Transport:** Streamable HTTP (`POST /mcp`, JSON-RPC, Antworten als `application/json`, keine Sitzungen). Getestet mit dem offiziellen MCP-SDK (TypeScript) als Client. Unterstützte Protokollversionen: 2025-06-18, 2025-03-26, 2024-11-05.
 - **Läuft im Prozess der App** und hat damit Zugriff auf den entsperrten Datenschlüssel. Ist die App gesperrt, antworten die Werkzeuge mit einem Hinweis. Der Schlüssel verlässt den Prozess nie.
-- **Aus, bis der Nutzer ihn einschaltet.** Er lauscht nur auf `127.0.0.1`, verlangt ein Bearer-Token (256 Bit, in `mcp.json` mit Rechten 0600) und prüft `Host` und `Origin` gegen DNS-Rebinding.
+- **Aus, bis der Nutzer ihn einschaltet.** Er lauscht nur auf `127.0.0.1`, verlangt ein Bearer-Token (256 Bit, verschlüsselt in der lokalen Datenbank, siehe „Geheimnisse dieses Rechners“) und prüft `Host` und `Origin` gegen DNS-Rebinding.
+- **Nur bei entsperrter App:** Token, Schreibstufe und Freigaben lassen sich nur bei entsperrter App ansehen und ändern (auch das Protokoll). Ist die App gesperrt, kennt der Server das Token nicht und antwortet mit 503 und einem Hinweis.
 - **Einstellungen gelten sofort:** Token, Schreibstufe und Freigaben liest der Server bei jeder Anfrage neu. Nur Ein/Aus und der Port erfordern einen Neustart. Grund: Die HTTP-Bibliothek schließt bestehende Verbindungen nicht, wenn ein Server angehalten wird, Anfragen darauf hingen bis zum Zeitablauf des Clients.
 - **Werkzeuge:** `list_kinds`, `list_records`, `get_record`, `search`; mit Schreibstufe zusätzlich `create_record` und `update_record`. Kein Löschen, kein Mailversand. Ohne Schreibstufe erscheinen die Schreibwerkzeuge nicht in der Liste und werden abgelehnt.
 - **Typen mit Personenbezug** (Ansprechpartner) sind für die KI gesperrt, bis der Nutzer sie einzeln freigibt. Das gilt für Lesen, Suchen und Schreiben, auch über `update_record` und `get_record` per ID. Die Fehlermeldung enthält keine Inhalte. Verweise (IDs) auf gesperrte Einträge in zugänglichen Einträgen bleiben sichtbar, die Inhalte nicht.
@@ -87,7 +88,7 @@ Umgesetzt in `core/src/mcp.rs`, Einstellungen in der App unter „Einstellungen,
 - PDFs (Antrag, Abrechnung) werden lokal erzeugt und in dem Ordner abgelegt, den die App je Rechner angegeben bekommt. Anhänge (Hotelrechnungen, Teilnahmebescheinigungen, Veranstalter-Formulare) liegen ebenfalls dort.
 - Die Synchronisation dieses Ordners übernimmt Nextcloud oder ein anderes Tool. Die App synchronisiert diese Dateien nicht.
 - Die Dateien liegen im Klartext auf dem verschlüsselten Laptop und im Nextcloud-Ordner. Der Ordner wird bewusst nicht zusätzlich verschlüsselt (entschieden).
-- Mail wird im Client per SMTP versendet. Die Zugangsdaten liegen im Schlüsselbund des Betriebssystems und werden nicht synchronisiert.
+- Mail wird im Client per SMTP versendet. Das SMTP-Passwort liegt verschlüsselt in der lokalen Datenbank und wird nicht synchronisiert (siehe „Geheimnisse dieses Rechners“).
 
 ## Entscheidungen im Überblick
 
@@ -111,7 +112,15 @@ Begründung für das eigene Sync-Protokoll: Es gibt genau einen Nutzer und wenig
 - Die Oberfläche bildet Formulare aus den Typdefinitionen. Neue Typen erscheinen damit ohne Oberflächencode. Besondere Ansichten (Graph, Dienstreise, Fortbildungsprozess) kommen als eigene Komponenten dazu.
 - **Graph-Ansicht** (`app/src/graph.ts`, `GraphView.tsx`): Knoten sind alle Einträge, Kanten ergeben sich aus den Verweisfeldern der Typdefinitionen. Neue Typen mit Verweisen erscheinen damit automatisch. Das Layout ist ein kraftbasiertes Verfahren (Fruchterman und Reingold) mit deterministischen Startpositionen, festem Wunschabstand (110 Einheiten) und Schwerkraft (0.3). Die Werte sind per Messreihe gewählt: Ein Wunschabstand, der von der Zeichenfläche abhängt, ergab für wenige Knoten riesige Abstände, und zu schwache Schwerkraft ließ unverbundene Knoten an den Rand wandern und verbundene zu einem Haufen zusammenrücken. Die Ansicht hat Zoomen, Verschieben, Auswahl mit Nachbarn, Hervorheben per Suche und Filter nach Typ. In jedem Eintrag steht außerdem die Liste der verknüpften Einträge.
 - Das Master-Passwort mindestens 10 Zeichen. Nach 15 Minuten ohne Eingabe sperrt sich die App.
-- Einstellungen dieses Rechners (Server, Token, Ordner für Anhänge) liegen in `settings.json` im Datenordner der App (Zugriffsrechte 0600 unter Linux). Das Token schützt nur den Zugriff auf Chiffretext. Eine Ablage im Schlüsselbund des Betriebssystems ist für die Mail-Zugangsdaten vorgesehen.
+- Einstellungen dieses Rechners (Server-Adresse, Ordner für Anhänge) liegen in `settings.json` im Datenordner der App (Zugriffsrechte 0600 unter Unix, die Datei entsteht gleich mit diesen Rechten). Das Token steht nicht darin.
+
+### Geheimnisse dieses Rechners
+
+- Sync-Token, MCP-Token und SMTP-Passwort (`core/src/secrets.rs`) liegen in der Tabelle `meta` der lokalen Datenbank, verschlüsselt wie ein Eintrag (XChaCha20-Poly1305 mit dem Eintragsschlüssel). Als ID für die zusätzlichen authentifizierten Daten dient `local/<Name>`. Sie enthält `/`, das in Eintrags-IDs des Servers nicht vorkommen kann, damit sich ein Geheimnis nie gegen einen Eintrag tauschen lässt. Sie werden nicht synchronisiert.
+- Lesbar sind sie nur bei entsperrter App. Beim Sperren verlassen die Token den Speicher. Ob ein Token hinterlegt ist, lässt sich auch gesperrt prüfen (für die Anzeige „eingerichtet“).
+- Bei der Einrichtung (vor dem Anlegen oder Beitreten) bleibt das eingegebene Sync-Token im Speicher und wird abgelegt, sobald der Tresor entsperrt ist.
+- Ältere Fassungen legten die Werte im Klartext ab (`secrets.json`, Token in `settings.json` und `mcp.json`). Beim ersten Entsperren übernimmt die App sie, löscht `secrets.json` und schreibt die beiden anderen Dateien ohne Token neu.
+- Der Schlüsselbund des Betriebssystems wird nicht verwendet. Die verschlüsselte Ablage funktioniert auf allen Plattformen gleich (auch Android) und braucht keinen Dienst wie den Secret Service unter Linux. Nachteil: Mail lässt sich nur bei entsperrter App senden, was ohnehin gilt.
 
 ## Beratungen, Protokolle und Markdown
 
@@ -136,11 +145,11 @@ Portierung des Dienstreisebusters (Python/Django) nach Rust und die App. Es läu
 - **Dateien** (Antrag, Abrechnung, Genehmigung, Formular des Veranstalters, Anhänge) liegen im Ordner für PDFs und Anhänge unter `Dienstreisen/<Datum>-<Zweck>-<ID>/`, den Nextcloud synchronisiert. Die Einträge speichern nur den relativen Pfad. Jeder Zugriff prüft, dass der Pfad im Ordner bleibt (keine `..`, keine absoluten Pfade, keine Verknüpfungen aus dem Ordner heraus). Dateien öffnet die App über einen eigenen Befehl, der den Pfad vom Kern prüfen lässt. Die Oberfläche hat kein allgemeines Recht, Pfade zu öffnen.
 - **PDF** (`core/src/pdf.rs`, `dienstreise.rs`): Der Antrag R001 füllt die mitgelieferte Vorlage (`core/assets/r001_antrag.pdf`). Die Abrechnung füllt das Formular, das der Veranstalter vorausgefüllt liefert. Die Unterschrift (SVG aus den Stammdaten) wird als Vektorpfade eingepasst. Abgesichert gegen die Python-Fassung: Alle 109 Feldwerte und Widget-Zustände sind identisch, die Darstellung ist pixelgleich (siehe `core/tests/fixtures/make_reference.py`). Abweichungen: Das Datum der Unterschrift im Antrag ist der Tag der Erzeugung, und ohne gewählte Mahlzeit kreuzt die Abrechnung keine an (Python kreuzte alle an). Formulare ohne Erscheinungsbild für Textfelder werden mit `NeedAppearances` vom Betrachter gezeichnet. Zentrierte und rechtsbündige Felder bekommen kein eigenes Erscheinungsbild.
 - **Mail** (`core/src/mail.rs`): SMTP direkt vom Rechner (STARTTLS, TLS oder unverschlüsselt) mit Anmeldung und Anhängen, Entwurf nach dem Wortlaut der Python-Fassung, Auswahl der Anhänge, Grenze 20 MB. Nach erfolgreichem Versand wechselt der Status (Antrag: Entwurf zu Beantragt; Abrechnung: Entwurf, Beantragt und Genehmigt zu Abgerechnet). Schlägt der Versand fehl, bleibt alles unverändert. Die TLS-Pfade sind nicht gegen einen echten Server getestet (nur gegen einen Test-SMTP-Server ohne Verschlüsselung).
-- **SMTP-Passwort** liegt nicht in den synchronisierten Daten, sondern in `secrets.json` im Datenordner (Rechte 0600). Eine Ablage im Schlüsselbund des Betriebssystems ist **noch nicht umgesetzt**.
+- **SMTP-Passwort** liegt nicht in den synchronisierten Daten, sondern verschlüsselt in der lokalen Datenbank (siehe „Geheimnisse dieses Rechners“).
 - **R002** (`dienstreise::r002_values`): Für Reisen ohne Formular des Veranstalters füllt die App den Erstattungsantrag R002 des LfF (Stand 04/2025) mit den Grunddaten vor und legt ihn als Abrechnung ab (derselbe Mailweg). Befüllt wird nur, was sich eindeutig zuordnen lässt: Person, Bankverbindung (IBAN ohne Leerzeichen im Kammfeld), Reisegrund, Genehmigung (wenn hinterlegt), Zweck, Orte, Zeiten, Abfahrt und Rückkehr sowie Bahn-Fahrkarte mit Preis. Tagegeld, Übernachtung, Art der BahnCard, Mitfahrer und weitere Verkehrsmittel bleiben leer und sind im PDF zu ergänzen. Eine Unterschrift setzt die App dort nicht ein. Geprüft an der Darstellung der Vorlage, **nicht** von der Behörde. Poppler-basierte Betrachter zeichnen unangekreuzte Kästchen dünn, weil die Vorlage nach dem Ausfüllen `NeedAppearances` bekommt. Acrobat und Browser zeichnen sie neu.
 - **Fahrkartenpreis** (`core/src/ticket.rs`): Aus dem Text der PDF-Fahrkarten wird ein Preis vorgeschlagen, den der Nutzer übernimmt. Das ist eine Heuristik (Schlüsselwörter wie „Gesamtpreis“ vor „Preis“, Steuer-, Rabatt- und BahnCard-Zeilen zählen nie, ohne Schlüsselwort nur ein einziger Betrag mit Währung). Sie ist an erfundenen Mustern und einem erzeugten Beispiel getestet, **nicht an echten Fahrkarten**. Bei Scans oder Bildern erkennt sie nichts.
 - **Import aus dem alten Django-Tool** (`core/src/import.rs`, Einstellungen, „Import aus dem alten Dienstreisebuster“): Übernimmt Stammdaten (mit Unterschrift und SMTP-Passwort), Reisen, Dateien und Anhänge aus `db.sqlite3` und dem Ordner `media`. Die Daten bleiben im alten Tool unverändert, Dateien werden kopiert. Einträge bekommen feste IDs (`import-reise-<Nr>`), ein erneuter Import überspringt Vorhandenes und überschreibt nichts. Zeiten rechnet er von UTC nach Europe/Berlin um, ausgefüllte Stammdaten bleiben unangetastet. Fehler bei einzelnen Einträgen und Dateien (fehlend, Pfad aus dem Medienordner heraus) stehen im Bericht, sie brechen den Import nicht ab. Getestet gegen Daten, die das alte Tool selbst erzeugt hat (`core/tests/fixtures/make_django_fixture.py`), nicht gegen deine echte Datenbank.
-- **Noch offen:** Die Ablage des SMTP-Passworts im Schlüsselbund und Tests der TLS-Pfade gegen einen echten Mailserver.
+- **Noch offen:** Tests der TLS-Pfade gegen einen echten Mailserver.
 
 ## Fortbildungen
 

@@ -38,6 +38,10 @@ pub struct McpConfig {
     /// Der Server läuft nur, wenn der Nutzer ihn eingeschaltet hat.
     pub enabled: bool,
     pub port: u16,
+    /// Wird nie in `mcp.json` geschrieben, sondern verschlüsselt in der Datenbank abgelegt (siehe
+    /// [`crate::secrets`]). Gelesen wird es noch, um Dateien älterer Fassungen zu übernehmen. Leer, solange die App
+    /// gesperrt ist.
+    #[serde(skip_serializing)]
     pub token: String,
     /// Schreibstufe: anlegen und ändern erlaubt.
     pub write: bool,
@@ -481,6 +485,10 @@ fn handle_http(mut request: Request, service: &Mutex<Service>) {
     }
     if !config.enabled {
         return respond_json(request, 503, Some(json!({"error": "Der KI-Zugriff ist ausgeschaltet"})), &[]);
+    }
+    if config.token.is_empty() {
+        // Das Token liegt verschlüsselt vor und ist erst nach dem Entsperren bekannt.
+        return respond_json(request, 503, Some(json!({"error": "Die App ist gesperrt. Bitte in der App entsperren."})), &[]);
     }
     let bearer = header(&request, "Authorization")
         .and_then(|h| h.strip_prefix("Bearer ").map(str::to_string))

@@ -15,7 +15,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 - Alle Daten werden Ende-zu-Ende verschlüsselt. Der Server speichert und sieht nur Chiffretext, auch nicht vorübergehend Klartext.
 - Ausgenommen sind:
-  - die Mail-Zugangsdaten (liegen im Schlüsselbund des Betriebssystems),
+  - die Mail-Zugangsdaten (werden nicht synchronisiert und liegen verschlüsselt in der lokalen Datenbank des Rechners),
   - PDFs und Anhänge (liegen als Dateien in einem lokalen Ordner, der per Nextcloud oder ein anderes Tool synchronisiert wird; je Rechner wird nur der Ordnerpfad in der App angegeben).
 - Entsperren per Master-Passwort mit Recovery-Key. Passkey/YubiKey ist keine Anforderung.
 - Das Gerät, auf dem die App läuft, ist verschlüsselt (Festplattenverschlüsselung).
@@ -89,6 +89,5 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen: Die App kompiliert, die Oberfläche ist aber nur im Browser (Chromium) gegen den Kern geprüft, nicht in der Tauri-Hülle selbst.
 - Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen (der Ordner `dienstreisebuster/` ist bereits entfernt, `db.sqlite3` und `media` des laufenden Tools bleiben dafür erhalten).
-- SMTP-Passwort im Schlüsselbund des Betriebssystems ablegen (zurzeit Datei mit Rechten 0600).
 - Tests der TLS-Verbindung zum Mailserver, der Preiserkennung an echten Fahrkarten und des R002 mit der Behörde.
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

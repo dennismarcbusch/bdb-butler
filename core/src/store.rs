@@ -158,6 +158,39 @@ impl Store {
         self.meta_set(META_KEYRING_VERSION, version.to_string().as_bytes())
     }
 
+    // ----- Geheimnisse dieses Rechners --------------------------------------------------------------------
+
+    /// Geheimnisse dieses Rechners (Sync-Token, MCP-Token, SMTP-Passwort) liegen mit dem Datenschlüssel
+    /// verschlüsselt in den Metadaten. Sie werden nicht synchronisiert. Die ID für die zusätzlichen
+    /// authentifizierten Daten enthält `/`, das in Eintrags-IDs des Servers nicht vorkommen kann, damit sich
+    /// Geheimnis und Eintrag nie vertauschen lassen.
+    fn secret_key(name: &str) -> (String, String) {
+        (format!("secret:{name}"), format!("local/{name}"))
+    }
+
+    pub fn secret_exists(&self, name: &str) -> Result<bool> {
+        Ok(self.meta_get(&Self::secret_key(name).0)?.is_some())
+    }
+
+    pub fn secret_get(&self, vault: &Vault, name: &str) -> Result<Option<String>> {
+        let (key, aad_id) = Self::secret_key(name);
+        let Some(blob) = self.meta_get(&key)? else { return Ok(None) };
+        let plain = zeroize::Zeroizing::new(vault.decrypt_entry(&aad_id, &blob)?);
+        let text = String::from_utf8(plain.to_vec()).map_err(|_| StoreError::Corrupt(format!("Geheimnis {name}")))?;
+        Ok(Some(text))
+    }
+
+    /// Speichert ein Geheimnis verschlüsselt. Ein leerer Wert löscht es.
+    pub fn secret_set(&self, vault: &Vault, name: &str, value: &str) -> Result<()> {
+        let (key, aad_id) = Self::secret_key(name);
+        if value.is_empty() {
+            self.conn.execute("DELETE FROM meta WHERE key = ?1", [&key])?;
+            return Ok(());
+        }
+        let blob = vault.encrypt_entry(&aad_id, value.as_bytes())?;
+        self.meta_set(&key, &blob)
+    }
+
     /// Uhr dieses Rechners. Die Knoten-ID wird beim ersten Aufruf erzeugt. Die Uhr übernimmt alle
     /// vorhandenen Stempel, damit neue Änderungen immer jünger sind.
     pub fn load_clock(&self, vault: &Vault) -> Result<Clock> {
@@ -413,6 +446,24 @@ mod tests {
         let pending = d.store.pending().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].base_seq, 1);
+    }
+
+    #[test]
+    fn secrets_are_encrypted_and_bound_to_their_name() {
+        let v = vault();
+        let s = Store::open_in_memory().unwrap();
+        assert!(!s.secret_exists("token").unwrap());
+        s.secret_set(&v, "token", "sehr-geheim").unwrap();
+        assert!(s.secret_exists("token").unwrap());
+        assert_eq!(s.secret_get(&v, "token").unwrap().as_deref(), Some("sehr-geheim"));
+        let raw = s.meta_get("secret:token").unwrap().unwrap();
+        assert!(!raw.windows(11).any(|w| w == b"sehr-geheim"));
+        // Unter anderem Namen abgelegt, lässt sich der Blob nicht lesen.
+        s.meta_set("secret:anderes", &raw).unwrap();
+        assert!(s.secret_get(&v, "anderes").is_err());
+        assert!(s.secret_get(&vault(), "token").is_err());
+        s.secret_set(&v, "token", "").unwrap();
+        assert_eq!(s.secret_get(&v, "token").unwrap(), None);
     }
 
     #[test]

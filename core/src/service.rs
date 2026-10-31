@@ -15,6 +15,7 @@ use crate::crypto::{self, KdfParams, Vault};
 use crate::mcp::McpConfig;
 use crate::record::{self, Clock, Record};
 use crate::schema::{self, FieldType, KindDef};
+use crate::secrets::{self, MCP_TOKEN, SMTP_PASSWORD, SYNC_TOKEN};
 use crate::store::{Store, StoreError, CONFLICT_KIND};
 use crate::sync::{self, SyncClient, SyncError, SyncReport};
 
@@ -85,6 +86,10 @@ impl From<record::RecordError> for ServiceError {
 pub type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Einstellungen dieses Rechners. Sie werden nicht synchronisiert (Pfade gelten je Rechner).
+///
+/// `settings.json` enthält nur Server-Adresse und Ordner. Das Token liegt verschlüsselt in der lokalen Datenbank
+/// (siehe [`crate::secrets`]) und steht nur bei entsperrter App im Speicher. Ein Token aus einer älteren
+/// `settings.json` wird beim ersten Entsperren übernommen und aus der Datei entfernt.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -92,6 +97,32 @@ pub struct Config {
     pub token: String,
     /// Ordner für PDFs und Anhänge (wird zum Beispiel von Nextcloud synchronisiert).
     pub attachments_dir: String,
+}
+
+/// Inhalt von `settings.json` (ohne Token).
+#[derive(Serialize)]
+struct SettingsFile<'a> {
+    server_url: &'a str,
+    attachments_dir: &'a str,
+}
+
+/// Schreibt eine Datei, die nur der Nutzer lesen darf. Sie entsteht gleich mit den Rechten 0600 (unter Unix)
+/// als Nebendatei und ersetzt dann die alte, damit sie nie mit weiteren Rechten oder halb geschrieben vorliegt.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let _ = fs::remove_file(&tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
 }
 
 impl Config {
@@ -157,45 +188,86 @@ impl Service {
 
     // ----- KI-Zugriff (MCP) ------------------------------------------------------------------------------
 
-    fn write_private(&self, name: &str, bytes: &[u8]) -> Result<()> {
-        let path = self.dir.join(name);
-        fs::write(&path, bytes).map_err(|e| ServiceError::Settings(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-        }
-        Ok(())
-    }
-
+    /// Liest `mcp.json`. Das Token steht dort nicht mehr (es liegt verschlüsselt in der Datenbank und wird beim
+    /// Entsperren geladen). Ein Token aus einer älteren Datei bleibt bis zum Entsperren im Speicher und wird dann
+    /// übernommen.
     fn load_mcp_config(&mut self) -> Result<()> {
-        let mut config: McpConfig = match fs::read(self.dir.join(MCP_FILE)) {
+        self.mcp = match fs::read(self.dir.join(MCP_FILE)) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|e| ServiceError::Settings(format!("mcp.json ist ungültig: {e}")))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => McpConfig::default(),
             Err(e) => return Err(ServiceError::Settings(e.to_string())),
         };
-        if config.token.is_empty() {
-            config.token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
-            self.mcp = config;
-            self.save_mcp_config()?;
-        } else {
-            self.mcp = config;
-        }
         Ok(())
     }
 
     fn save_mcp_config(&self) -> Result<()> {
+        // `McpConfig` schreibt das Token nicht mit (siehe dort).
         let json = serde_json::to_vec_pretty(&self.mcp).map_err(|e| ServiceError::Settings(e.to_string()))?;
-        self.write_private(MCP_FILE, &json)
+        write_private(&self.dir.join(MCP_FILE), &json).map_err(|e| ServiceError::Settings(e.to_string()))
+    }
+
+    fn write_settings(&self) -> Result<()> {
+        let file = SettingsFile { server_url: &self.config.server_url, attachments_dir: &self.config.attachments_dir };
+        let json = serde_json::to_vec_pretty(&file).map_err(|e| ServiceError::Settings(e.to_string()))?;
+        write_private(&self.dir.join(SETTINGS_FILE), &json).map_err(|e| ServiceError::Settings(e.to_string()))
+    }
+
+    /// Nach dem Entsperren: Geheimnisse aus der verschlüsselten Ablage laden. Liegen noch Werte im Speicher (eben
+    /// eingetragen, oder aus Dateien älterer Fassungen gelesen), werden sie verschlüsselt abgelegt und die Dateien
+    /// ohne sie neu geschrieben.
+    fn load_secrets(&mut self) -> Result<()> {
+        let vault = &self.session.as_ref().ok_or(ServiceError::Locked)?.vault;
+        let store = &self.store;
+
+        let settings_had_token = fs::read_to_string(self.dir.join(SETTINGS_FILE)).is_ok_and(|t| t.contains("\"token\""));
+        if self.config.token.is_empty() {
+            self.config.token = store.secret_get(vault, SYNC_TOKEN)?.unwrap_or_default();
+        } else {
+            store.secret_set(vault, SYNC_TOKEN, &self.config.token)?;
+        }
+
+        let mcp_had_token = !self.mcp.token.is_empty();
+        if mcp_had_token {
+            store.secret_set(vault, MCP_TOKEN, &self.mcp.token)?;
+        } else {
+            self.mcp.token = match store.secret_get(vault, MCP_TOKEN)? {
+                Some(token) => token,
+                None => {
+                    let token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
+                    store.secret_set(vault, MCP_TOKEN, &token)?;
+                    token
+                }
+            };
+        }
+
+        let legacy = secrets::read_legacy(&self.dir);
+        if let Some(password) = legacy.get(SMTP_PASSWORD) {
+            if !store.secret_exists(SMTP_PASSWORD)? {
+                store.secret_set(vault, SMTP_PASSWORD, password)?;
+            }
+        }
+        secrets::remove_legacy(&self.dir);
+
+        if settings_had_token {
+            self.write_settings()?;
+        }
+        if mcp_had_token || fs::read_to_string(self.dir.join(MCP_FILE)).is_ok_and(|t| t.contains("\"token\"")) {
+            self.save_mcp_config()?;
+        }
+        Ok(())
     }
 
     pub fn mcp_config(&self) -> &McpConfig {
         &self.mcp
     }
 
-    /// Ändert Einstellungen des KI-Zugriffs. Das Token bleibt unverändert (siehe [`Service::new_mcp_token`]).
+    /// Ändert Einstellungen des KI-Zugriffs. Das Token bleibt unverändert (siehe [`Service::new_mcp_token`]). Nur
+    /// bei entsperrter App, damit niemand am gesperrten Rechner den Zugriff auf Personendaten freigeben kann.
     pub fn set_mcp_config(&mut self, enabled: bool, port: u16, write: bool, allow_personal: &[String]) -> Result<()> {
+        if self.session.is_none() {
+            return Err(ServiceError::Locked);
+        }
         if port != 0 && port < 1024 {
             return Err(ServiceError::Settings("Der Port muss mindestens 1024 sein".into()));
         }
@@ -216,8 +288,11 @@ impl Service {
 
     /// Erzeugt ein neues Token. Clients mit dem alten Token verlieren den Zugriff.
     pub fn new_mcp_token(&mut self) -> Result<()> {
-        self.mcp.token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
-        self.save_mcp_config()
+        let (store, vault, _) = self.unlocked()?;
+        let token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
+        store.secret_set(vault, MCP_TOKEN, &token)?;
+        self.mcp.token = token;
+        Ok(())
     }
 
     /// Hängt einen Eintrag an das Protokoll des KI-Zugriffs an. Es enthält Werkzeug, Typ, ID und Feldnamen,
@@ -229,13 +304,14 @@ impl Service {
         }
         let mut line = entry.to_string();
         line.push('\n');
-        let opened = fs::OpenOptions::new().create(true).append(true).open(&path);
-        if let Ok(mut file) = opened {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-            }
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        if let Ok(mut file) = options.open(&path) {
             let _ = file.write_all(line.as_bytes());
         }
     }
@@ -262,8 +338,11 @@ impl Service {
         })
     }
 
+    /// Server und Token sind eingetragen. Bei gesperrter App ist das Token nicht im Speicher, dann zählt, ob es
+    /// verschlüsselt abgelegt ist.
     fn is_configured(&self) -> bool {
-        !self.config.server_url.trim().is_empty() && !self.config.token.trim().is_empty()
+        !self.config.server_url.trim().is_empty()
+            && (!self.config.token.trim().is_empty() || self.store.secret_exists(SYNC_TOKEN).unwrap_or(false))
     }
 
     pub fn config(&self) -> &Config {
@@ -277,20 +356,16 @@ impl Service {
             attachments_dir: config.attachments_dir.trim().to_string(),
         };
         config.validate()?;
-        let path = self.dir.join(SETTINGS_FILE);
-        let json = serde_json::to_vec_pretty(&config).map_err(|e| ServiceError::Settings(e.to_string()))?;
-        fs::write(&path, json).map_err(|e| ServiceError::Settings(e.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        // Ohne Tresor (Einrichtung) bleibt das Token bis zum Anlegen oder Beitreten im Speicher.
+        if let Some(session) = &self.session {
+            self.store.secret_set(&session.vault, SYNC_TOKEN, &config.token)?;
         }
         self.config = config;
-        Ok(())
+        self.write_settings()
     }
 
     fn client(&self) -> Result<SyncClient> {
-        if !self.is_configured() {
+        if self.config.server_url.trim().is_empty() || self.config.token.trim().is_empty() {
             return Err(ServiceError::NotConfigured);
         }
         Ok(SyncClient::new(&self.config.server_url, &self.config.token))
@@ -318,8 +393,7 @@ impl Service {
             self.store.set_keyring(&keyring, 0)?;
             (vault, recovery)
         };
-        let clock = self.store.load_clock(&vault)?;
-        self.session = Some(Session { vault, clock });
+        self.start_session(vault)?;
         Ok(recovery.to_display())
     }
 
@@ -334,9 +408,7 @@ impl Service {
             Err(SyncError::Crypto(e)) => return Err(e.into()),
             other => other?,
         };
-        let clock = self.store.load_clock(&vault)?;
-        self.session = Some(Session { vault, clock });
-        Ok(())
+        self.start_session(vault)
     }
 
     pub fn unlock(&mut self, password: &str) -> Result<()> {
@@ -357,11 +429,14 @@ impl Service {
     fn start_session(&mut self, vault: Vault) -> Result<()> {
         let clock = self.store.load_clock(&vault)?;
         self.session = Some(Session { vault, clock });
-        Ok(())
+        self.load_secrets()
     }
 
+    /// Sperrt die App. Datenschlüssel und Token verlassen den Speicher.
     pub fn lock(&mut self) {
         self.session = None;
+        self.config.token.clear();
+        self.mcp.token.clear();
     }
 
     /// Ändert das Master-Passwort. Der Recovery-Key bleibt gültig, die Daten bleiben unverändert.
@@ -388,6 +463,12 @@ impl Service {
 
     /// Gleicht mit dem Server ab. Vorher wird der Keyring abgeglichen (siehe [`Service::sync_keyring`]).
     pub fn sync(&mut self) -> Result<SyncReport> {
+        if !self.is_configured() {
+            return Err(ServiceError::NotConfigured);
+        }
+        if self.session.is_none() {
+            return Err(ServiceError::Locked);
+        }
         let client = self.client()?;
         let mut warnings = self.sync_keyring(&client)?;
         let session = self.session.as_mut().ok_or(ServiceError::Locked)?;
@@ -833,12 +914,69 @@ mod tests {
 
         let s = Service::open(&dir, FAST).unwrap();
         assert_eq!(s.config().attachments_dir, "/home/x/Nextcloud/BdB");
+        assert!(!fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap().contains("geheim"), "Token nie im Klartext");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = fs::metadata(dir.join(SETTINGS_FILE)).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "settings.json darf nur dem Nutzer gehören");
         }
+    }
+
+    #[test]
+    fn tokens_and_passwords_are_stored_encrypted_and_only_available_when_unlocked() {
+        let dir = tempdir();
+        let mut s = Service::open(&dir, FAST).unwrap();
+        s.create_vault(PASSWORD).unwrap();
+        s.set_config(Config { server_url: "https://butler.example".into(), token: "sync-geheim".into(), ..Config::default() })
+            .unwrap();
+        s.set_smtp_password("smtp-geheim").unwrap();
+        let mcp_token = s.mcp_config().token.clone();
+        assert_eq!(mcp_token.len(), 64);
+        s.set_mcp_config(true, 0, false, &[]).unwrap();
+
+        let plain_in = |name: &str| fs::read(dir.join(name)).map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default();
+        for file in [SETTINGS_FILE, MCP_FILE, "secrets.json", DB_FILE] {
+            let text = plain_in(file);
+            assert!(!text.contains("sync-geheim") && !text.contains("smtp-geheim") && !text.contains(&mcp_token), "{file}");
+        }
+
+        // Gesperrt: nichts davon im Speicher, eingerichtet bleibt es trotzdem.
+        s.lock();
+        assert!(s.config().token.is_empty() && s.mcp_config().token.is_empty());
+        assert!(s.status().unwrap().configured && s.smtp_password_is_set());
+        assert!(matches!(s.set_mcp_config(true, 0, true, &[]), Err(ServiceError::Locked)));
+        assert!(matches!(s.new_mcp_token(), Err(ServiceError::Locked)));
+        drop(s);
+
+        let mut s = Service::open(&dir, FAST).unwrap();
+        s.unlock(PASSWORD).unwrap();
+        assert_eq!(s.config().token, "sync-geheim");
+        assert_eq!(s.mcp_config().token, mcp_token);
+    }
+
+    #[test]
+    fn plaintext_secrets_of_older_versions_are_migrated() {
+        let dir = tempdir();
+        let mut s = Service::open(&dir, FAST).unwrap();
+        s.create_vault(PASSWORD).unwrap();
+        drop(s);
+        // So legten ältere Fassungen die Geheimnisse ab.
+        fs::write(dir.join(SETTINGS_FILE), r#"{"server_url":"https://butler.example","token":"alt-sync","attachments_dir":""}"#).unwrap();
+        fs::write(dir.join(MCP_FILE), r#"{"enabled":false,"port":8765,"token":"alt-mcp","write":false,"allow_personal":[]}"#).unwrap();
+        fs::write(dir.join("secrets.json"), r#"{"smtp_passwort":"alt-smtp"}"#).unwrap();
+
+        let mut s = Service::open(&dir, FAST).unwrap();
+        s.unlock(PASSWORD).unwrap();
+        assert_eq!(s.config().token, "alt-sync");
+        assert_eq!(s.mcp_config().token, "alt-mcp");
+        assert!(s.smtp_password_is_set());
+        assert!(!dir.join("secrets.json").exists());
+        for file in [SETTINGS_FILE, MCP_FILE] {
+            let text = fs::read_to_string(dir.join(file)).unwrap();
+            assert!(!text.contains("alt-") && !text.contains("token"), "{file}: {text}");
+        }
+        assert_eq!(s.config().server_url, "https://butler.example");
     }
 
     #[test]

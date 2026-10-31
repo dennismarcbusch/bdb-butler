@@ -330,8 +330,20 @@ fn call_mcp(app: &App, command: &str, args: &Value) -> Option<ApiResult> {
             .lock()
             .map_err(|_| ApiError::new("internal", "Interner Fehler: Sperre vergiftet"))
     };
+    // Die Einstellungen des KI-Zugriffs (Token, Schreibstufe, Freigabe von Personendaten) gibt es nur bei
+    // entsperrter App. Sonst könnte jemand am gesperrten Rechner den Zugriff vorbereiten.
+    let unlocked = || -> Result<(), ApiError> {
+        if lock()?.status()?.unlocked {
+            Ok(())
+        } else {
+            Err(ServiceError::Locked.into())
+        }
+    };
     Some((|| match command {
-        "mcp_get" => app.mcp_state(),
+        "mcp_get" => {
+            unlocked()?;
+            app.mcp_state()
+        }
         "mcp_set" => {
             let a: McpSetArgs = parse(args)?;
             lock()?.set_mcp_config(a.enabled, a.port, a.write, &a.allow_personal)?;
@@ -344,6 +356,7 @@ fn call_mcp(app: &App, command: &str, args: &Value) -> Option<ApiResult> {
             app.mcp_state()
         }
         "mcp_audit" => {
+            unlocked()?;
             let a: AuditArgs = parse(args)?;
             Ok(Value::Array(lock()?.audit_tail(a.limit.unwrap_or(50).min(200))))
         }
@@ -640,6 +653,12 @@ mod tests {
     #[test]
     fn mcp_settings_are_validated_and_start_and_stop_the_server() {
         let s = service();
+        // Gesperrt gibt es weder Token noch Einstellungen.
+        assert_eq!(err(&s, "mcp_get", Value::Null).code, "locked");
+        assert_eq!(err(&s, "mcp_set", json!({"enabled": true, "port": 0, "write": true})).code, "locked");
+        assert_eq!(err(&s, "mcp_new_token", Value::Null).code, "locked");
+        assert_eq!(err(&s, "mcp_audit", json!({})).code, "locked");
+        ok(&s, "create_vault", json!({"password": PASSWORD}));
         let initial = ok(&s, "mcp_get", Value::Null);
         assert_eq!((initial["enabled"].clone(), initial["running"].clone(), initial["write"].clone()), (json!(false), json!(false), json!(false)));
         let token = initial["token"].as_str().unwrap().to_string();
@@ -664,7 +683,6 @@ mod tests {
         assert_eq!(mcp_post(&url, "falsch", ping).0, 401);
 
         // Aufrufe landen im Protokoll, ohne Inhalte.
-        ok(&s, "create_vault", json!({"password": PASSWORD}));
         let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_record","arguments":{"kind":"schule","fields":{"name":"Vertrauliche Schule"}}}}"#;
         let (status, body) = mcp_post(&url, &token, call);
         assert_eq!(status, 200);
@@ -683,6 +701,14 @@ mod tests {
         assert_eq!(mcp_post(&new_url, &token, ping).0, 401);
         assert_eq!(mcp_post(&new_url, &new_token, ping).0, 200);
 
+        // Gesperrt kennt der Server das Token nicht und antwortet mit einem Hinweis.
+        ok(&s, "lock", Value::Null);
+        let (status, body) = mcp_post(&new_url, &new_token, ping);
+        assert_eq!(status, 503);
+        assert!(body.contains("gesperrt"), "{body}");
+        ok(&s, "unlock", json!({"password": PASSWORD}));
+        assert_eq!(mcp_post(&new_url, &new_token, ping).0, 200);
+
         // Ausschalten.
         let off = ok(&s, "mcp_set", json!({"enabled": false, "port": 0, "write": false, "allow_personal": []}));
         assert_eq!((off["running"].clone(), off["url"].clone()), (json!(false), Value::Null));
@@ -697,11 +723,13 @@ mod tests {
         let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let dir = std::env::temp_dir().join(format!("bdb-api-mcp-{name}"));
         let first = App::new(Service::open(&dir, FAST).unwrap());
+        ok(&first, "create_vault", json!({"password": PASSWORD}));
         ok(&first, "mcp_set", json!({"enabled": false, "port": 9123, "write": true, "allow_personal": ["ansprechpartner"]}));
         let token = ok(&first, "mcp_get", Value::Null)["token"].clone();
         drop(first);
 
         let second = App::new(Service::open(&dir, FAST).unwrap());
+        ok(&second, "unlock", json!({"password": PASSWORD}));
         let state = ok(&second, "mcp_get", Value::Null);
         assert_eq!(state["port"], 9123);
         assert_eq!(state["write"], true);
@@ -711,13 +739,16 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(dir.join("mcp.json")).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "mcp.json enthält das Token und darf nur dem Nutzer gehören");
+            assert_eq!(mode & 0o077, 0, "mcp.json darf nur dem Nutzer gehören");
         }
+        let file = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(!file.contains(token.as_str().unwrap()), "Das Token steht nicht in mcp.json");
     }
 
     #[test]
     fn busy_port_is_reported() {
         let s = service();
+        ok(&s, "create_vault", json!({"password": PASSWORD}));
         let blocker = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = blocker.local_addr().unwrap().port();
         if port < 1024 {

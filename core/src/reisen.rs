@@ -18,11 +18,8 @@ use crate::dienstreise::{self, Fields};
 use crate::mail::{self, Mail, MailAttachment, MailError, Security, SmtpSettings, MAX_ATTACHMENT_BYTES};
 use crate::pdf::{self, PdfError};
 use crate::schema::{self, STAMMDATEN_ID};
-use crate::secrets::Secrets;
+use crate::secrets::SMTP_PASSWORD;
 use crate::service::{RecordView, Result, Service, ServiceError};
-
-/// Name des Schlüssels für das SMTP-Passwort.
-const SMTP_PASSWORD_KEY: &str = "smtp_passwort";
 
 /// Ohne diese Angaben lassen sich Antrag und Abrechnung nicht sinnvoll ausfüllen.
 const REQUIRED_PERSONAL_DATA: &[&str] = &["name", "vorname", "plz", "ort", "strasse", "dienststelle_kurz", "personal_nr"];
@@ -154,17 +151,21 @@ impl Service {
         self.save_with_id("stammdaten", STAMMDATEN_ID, fields).map(|_| ())
     }
 
-    fn secrets(&self) -> Secrets {
-        Secrets::new(&self.dir)
-    }
-
-    /// Das SMTP-Passwort bleibt auf diesem Rechner und wird nicht synchronisiert. Ein leerer Wert löscht es.
+    /// Das SMTP-Passwort bleibt auf diesem Rechner, verschlüsselt in der lokalen Datenbank, und wird nicht
+    /// synchronisiert. Ein leerer Wert löscht es.
     pub fn set_smtp_password(&mut self, password: &str) -> Result<()> {
-        self.secrets().set(SMTP_PASSWORD_KEY, password).map_err(io_err)
+        let (store, vault, _) = self.unlocked()?;
+        store.secret_set(vault, SMTP_PASSWORD, password)?;
+        Ok(())
     }
 
     pub fn smtp_password_is_set(&self) -> bool {
-        self.secrets().is_set(SMTP_PASSWORD_KEY)
+        self.store.secret_exists(SMTP_PASSWORD).unwrap_or(false)
+    }
+
+    fn smtp_password(&self) -> Result<String> {
+        let session = self.session.as_ref().ok_or(ServiceError::Locked)?;
+        Ok(self.store.secret_get(&session.vault, SMTP_PASSWORD)?.unwrap_or_default())
     }
 
     fn require_personal_data(&mut self) -> Result<Fields> {
@@ -552,15 +553,15 @@ impl Service {
         Ok(MailDraft { to, from, subject, body, attachments, already_sent })
     }
 
-    fn smtp_settings(&self, personal: &Fields) -> SmtpSettings {
+    fn smtp_settings(&self, personal: &Fields) -> Result<SmtpSettings> {
         let port = personal.get("smtp_port").and_then(Value::as_f64).filter(|p| (1.0..=65535.0).contains(p)).map_or(587, |p| p as u16);
-        SmtpSettings {
+        Ok(SmtpSettings {
             host: text(personal, "smtp_host").trim().to_string(),
             port,
             user: text(personal, "smtp_user").trim().to_string(),
-            password: self.secrets().get(SMTP_PASSWORD_KEY).unwrap_or_default(),
+            password: self.smtp_password()?,
             security: Security::parse(text(personal, "smtp_sicherheit")),
-        }
+        })
     }
 
     /// Sendet die Mail. Gewählt werden die Anhänge mit den Schlüsseln aus `selected` (das Dokument selbst ist
@@ -570,7 +571,7 @@ impl Service {
         let trip = self.trip(id)?;
         let personal = self.stammdaten()?.fields;
         let (to, from) = Self::recipient_and_sender(&personal, kind);
-        let smtp = self.smtp_settings(&personal);
+        let smtp = self.smtp_settings(&personal)?;
         mail::check(&smtp, &from, &to).map_err(mail_err)?;
 
         let mut attachments = Vec::new();
