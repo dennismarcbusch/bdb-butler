@@ -105,6 +105,10 @@ export function recordMeta(kind: KindDef, record: RecordView): string {
       return [date(text('reise_beginn')), text('status')].filter(Boolean).join(' · ');
     case 'beratung':
       return date(text('datum'));
+    case 'bedarf':
+      return [date(text('eingegangen_am')), text('status')].filter(Boolean).join(' · ');
+    case 'fortbildung':
+      return [date(text('beginn')), text('phase')].filter(Boolean).join(' · ');
     case 'protokoll':
       return [date(text('datum')), text('art')].filter(Boolean).join(' · ');
     default:

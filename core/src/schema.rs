@@ -145,6 +145,7 @@ pub const REISEARTEN: &[&str] = &["Dienstreise", "Fortbildungsreise"];
 pub const REISEORTE: &[&str] = &["Wohnort", "Dienststelle", "Anderer Ort"];
 pub const MAHLZEITEN: &[&str] = &["Frühstück", "Mittagessen", "Abendessen"];
 pub const ANHANGARTEN: &[&str] = &["Fahrkarte", "Teilnahmebescheinigung", "Hotelrechnung", "Sonstiges"];
+pub const BEDARFSSTATUS: &[&str] = &["Offen", "Eingeplant", "Abgelehnt"];
 pub const SMTP_SICHERHEIT: &[&str] = &["STARTTLS", "SSL/TLS", "keine"];
 
 /// Feste ID des Eintrags mit den Stammdaten (gleich auf allen Rechnern, damit sie sich zusammenführen lassen).
@@ -287,6 +288,56 @@ pub fn kinds() -> Vec<KindDef> {
                 reference("schule", "Schule", "schule"),
                 reference("protokoll", "Aus Protokoll", "protokoll"),
                 markdown("beschreibung", "Beschreibung"),
+            ],
+        },
+        KindDef {
+            kind: "bedarf",
+            label: "Bedarfsanmeldung",
+            label_plural: "Bedarfsanmeldungen",
+            title_field: "thema",
+            sort_field: "eingegangen_am",
+            sort_desc: true,
+            personal: false,
+            hidden: false,
+            singleton: false,
+            fields: vec![
+                text("thema", "Thema", true),
+                required(with_default(choice("status", "Status", BEDARFSSTATUS), "Offen")),
+                date("eingegangen_am", "Eingegangen am", false),
+                reference("schule", "Schule", "schule"),
+                reference("kontakt", "Kontakt", "ansprechpartner"),
+                number("interessenten", "Anzahl Interessenten"),
+                reference("fortbildung", "Eingeplant in Fortbildung", "fortbildung"),
+                markdown("beschreibung", "Beschreibung des Bedarfs"),
+            ],
+        },
+        KindDef {
+            kind: "fortbildung",
+            label: "Fortbildung",
+            label_plural: "Fortbildungen",
+            title_field: "titel",
+            sort_field: "beginn",
+            sort_desc: true,
+            personal: false,
+            hidden: false,
+            singleton: false,
+            fields: vec![
+                text("titel", "Titel", true),
+                required(with_default(choice("phase", "Phase", crate::fortbildung::PHASES), "Planung")),
+                text("referent", "Referent", false),
+                markdown("inhalt", "Inhalt"),
+                date_time("beginn", "Beginn", false),
+                date_time("ende", "Ende", false),
+                text("ort", "Ort", false),
+                number("teilnehmer_geplant", "Anzahl Teilnehmer (geplant)"),
+                date("ausschreibung_am", "Ausgeschrieben am", false),
+                date("anmeldeschluss", "Anmeldeschluss", false),
+                text("fibs_nummer", "Veranstaltungsnummer in FIBS", false),
+                markdown("checkliste_ausschreibung", "Checkliste Ausschreibung"),
+                markdown("checkliste_durchfuehrung", "Checkliste Durchführung"),
+                number("teilnehmer_tatsaechlich", "Anzahl Teilnehmer (tatsächlich)"),
+                markdown("checkliste_nachbereitung", "Checkliste Nachbereitung"),
+                markdown("notizen", "Notizen"),
             ],
         },
         KindDef {

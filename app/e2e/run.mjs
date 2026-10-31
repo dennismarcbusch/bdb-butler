@@ -979,6 +979,105 @@ async function main() {
       smtp.close();
     });
 
+    await step('Fortbildung: Bedarfe sammeln, planen, ausschreiben, durchführen, nachbereiten', async () => {
+      const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: false }).first().click();
+
+      // Bedarfsanmeldungen: eine über die Oberfläche, zwei über den Kern.
+      await nav('Bedarfsanmeldungen');
+      await page.getByRole('button', { name: 'Bedarfsanmeldung anlegen' }).click();
+      assert.equal(await page.getByLabel('Status *').inputValue(), 'Offen', 'Status ist vorbelegt');
+      await page.getByLabel('Thema *').fill('KI im Unterricht');
+      await page.getByLabel('Anzahl Interessenten').fill('8');
+      await page.getByLabel('Eingegangen am').fill('2026-10-01');
+      await page.getByLabel('Schule', { exact: true }).selectOption({ label: 'Grundschule am See' });
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'KI im Unterricht' }).waitFor();
+      await bridgeCall(bridgeA, 'save', { kind: 'bedarf', fields: { thema: 'Tablets im Unterricht', interessenten: 12, eingegangen_am: '2026-10-10' } });
+      await bridgeCall(bridgeA, 'save', { kind: 'bedarf', fields: { thema: 'Datenschutz in der Schule', interessenten: 5, eingegangen_am: '2026-10-20' } });
+      await nav('Dienstreisen');
+      await page.getByRole('navigation').getByRole('button', { name: /Bedarfsanmeldungen \(3 offen\)/ }).waitFor();
+
+      // Fortbildung anlegen: sie beginnt in der Planung.
+      await nav('Fortbildungen');
+      await page.getByRole('button', { name: 'Fortbildung anlegen' }).click();
+      await page.getByLabel('Titel *').fill('KI im Unterricht, Tagesveranstaltung');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'KI im Unterricht, Tagesveranstaltung' }).waitFor();
+      assert.equal(await page.getByLabel('Phase *').inputValue(), 'Planung');
+      const process = page.getByRole('region', { name: 'Prozess der Fortbildung' });
+      const current = () => process.locator('.phases li[aria-current="step"]').innerText();
+      const forward = async (phase) => process.getByRole('button', { name: new RegExp(`Weiter zu „${phase}“`) }).click();
+
+      // Ohne Planungsangaben keine Ausschreibung, die Meldung nennt das Fehlende.
+      await forward('Ausschreibung');
+      const alert = process.getByRole('alert');
+      await alert.waitFor();
+      for (const missing of ['Referent', 'Inhalt', 'Ort', 'Anzahl Teilnehmer']) assert.match(await alert.innerText(), new RegExp(missing));
+      assert.equal(await current(), 'Planung');
+
+      // Planung ausfüllen und weiter.
+      await page.getByLabel('Referent', { exact: true }).fill('Dr. Beispiel');
+      await page.getByRole('textbox', { name: 'Inhalt', exact: true }).fill('Grundlagen und Praxisbeispiele');
+      await page.getByLabel('Beginn', { exact: true }).fill('2027-02-10T09:00');
+      await page.getByLabel('Ort', { exact: true }).fill('Ulm');
+      await page.getByLabel('Anzahl Teilnehmer (geplant)').fill('25');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('region', { name: 'Fortbildungen' }).locator('li button', { hasText: '10.02.2027 · Planung' }).waitFor();
+      await forward('Ausschreibung');
+      await until(async () => (await current()) === 'Ausschreibung', 'Phase Ausschreibung');
+      await page.getByRole('region', { name: 'Fortbildungen' }).locator('li button', { hasText: '10.02.2027 · Ausschreibung' }).waitFor();
+      assert.equal(await page.getByLabel('Phase *').inputValue(), 'Ausschreibung', 'das Formular folgt der Phase');
+
+      // Bedarfsanmeldungen zuordnen.
+      await process.getByRole('group', { name: 'Offene Anmeldungen zuordnen' }).getByLabel('KI im Unterricht').check();
+      await process.getByRole('group', { name: 'Offene Anmeldungen zuordnen' }).getByLabel('Tablets im Unterricht').check();
+      await process.getByRole('button', { name: 'Zuordnen' }).click();
+      await process.getByTestId('bedarf-summe').filter({ hasText: '2 zugeordnet, 20 Interessenten (geplant: 25 Teilnehmer)' }).waitFor();
+      const requests = await bridgeCall(bridgeA, 'list', { kind: 'bedarf' });
+      assert.deepEqual(requests.map((r) => r.fields.status).sort(), ['Eingeplant', 'Eingeplant', 'Offen']);
+      await page.getByRole('navigation').getByRole('button', { name: /Bedarfsanmeldungen \(1 offen\)/ }).waitFor();
+      await shot(page, '22-fortbildung');
+
+      // Durchführung braucht die FIBS-Nummer.
+      await forward('Durchführung');
+      await alert.filter({ hasText: 'FIBS' }).waitFor();
+      await page.getByLabel('Veranstaltungsnummer in FIBS').fill('2027-12345');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await until(async () => (await bridgeCall(bridgeA, 'list', { kind: 'fortbildung' }))[0].fields.fibs_nummer === '2027-12345', 'FIBS-Nummer gespeichert');
+      await forward('Durchführung');
+      await until(async () => (await current()) === 'Durchführung', 'Phase Durchführung');
+
+      // Standard-Checklisten.
+      const progressOf = (field) => process.getByTestId(`fortschritt-${field}`);
+      await process.locator('li', { hasText: 'Durchführung:' }).getByRole('button', { name: 'Standard-Checkliste einfügen' }).click();
+      await progressOf('checkliste_durchfuehrung').filter({ hasText: '0 von 6 Aufgaben erledigt' }).waitFor();
+      await forward('Nachbereitung');
+      await until(async () => (await current()) === 'Nachbereitung', 'Phase Nachbereitung');
+      await process.locator('li', { hasText: 'Nachbereitung:' }).getByRole('button', { name: 'Standard-Checkliste einfügen' }).click();
+      await progressOf('checkliste_nachbereitung').filter({ hasText: '0 von 6 Aufgaben erledigt' }).waitFor();
+
+      // Abschluss erst mit abgehakter Checkliste. Zwei Aufgaben abhaken: es bleiben vier offene.
+      const trainingId = (await bridgeCall(bridgeA, 'list', { kind: 'fortbildung' }))[0].id;
+      const checklist = (await bridgeCall(bridgeA, 'get', { id: trainingId })).fields.checkliste_nachbereitung;
+      const lines = checklist.split('\n');
+      lines[0] = lines[0].replace('[ ]', '[x]');
+      lines[1] = lines[1].replace('[ ]', '[x]');
+      await bridgeCall(bridgeA, 'save', { kind: 'fortbildung', id: trainingId, fields: { checkliste_nachbereitung: lines.join('\n') } });
+      await forward('Abgeschlossen');
+      await alert.filter({ hasText: '4 offene Aufgaben' }).waitFor();
+      assert.equal(await current(), 'Nachbereitung');
+      await bridgeCall(bridgeA, 'save', { kind: 'fortbildung', id: trainingId, fields: { checkliste_nachbereitung: checklist.replaceAll('[ ]', '[x]') } });
+      await forward('Abgeschlossen');
+      await until(async () => (await current()) === 'Abgeschlossen', 'Phase Abgeschlossen');
+      assert.equal(await process.getByRole('button', { name: 'Abgeschlossen', exact: true }).isDisabled(), true);
+      await progressOf('checkliste_nachbereitung').filter({ hasText: '6 von 6 Aufgaben erledigt' }).waitFor();
+
+      // Zurück geht immer.
+      await process.getByRole('button', { name: /Zurück zu „Nachbereitung“/ }).click();
+      await until(async () => (await current()) === 'Nachbereitung', 'zurück zur Nachbereitung');
+      await shot(page, '23-fortbildung-nachbereitung');
+    });
+
     await step('Einstellungen: Passwort ändern', async () => {
       await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
       await page.getByLabel('Aktuelles Passwort').fill('falsches passwort hier');
@@ -1004,12 +1103,12 @@ async function main() {
     await step('Keine unerwarteten Fehler in der Browser-Konsole', async () => {
       // Die Brücke antwortet auf Fehler mit HTTP 400, die der Test absichtlich auslöst (falsches Passwort,
       // fehlende Pflichtfelder, ungültiger Recovery-Key, falsche Reihenfolge der Reisezeiten, Mailversand mit
-      // falschem Passwort). Der Browser protokolliert sie als Ladefehler.
+      // falschem Passwort, gesperrte Phasenwechsel der Fortbildung). Der Browser protokolliert sie als Ladefehler.
       const expected = /^Failed to load resource: the server responded with a status of 400/;
       const unexpected = consoleErrors.filter((m) => !expected.test(m));
       assert.deepEqual(unexpected, [], unexpected.join('\n'));
       const provoked = consoleErrors.length - unexpected.length;
-      assert.equal(provoked, 8, `${provoked} statt 8 erwarteter Fehlerantworten`);
+      assert.equal(provoked, 11, `${provoked} statt 11 erwarteter Fehlerantworten`);
     });
   } finally {
     await browser.close();

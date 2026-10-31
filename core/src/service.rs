@@ -537,6 +537,23 @@ impl Service {
                 ("Beendigung der Reise", merged("reise_ende")),
             ])?;
         }
+        if kind == "fortbildung" {
+            // Phasenwechsel vorwärts nur mit vollständigen Angaben (siehe `fortbildung::blockers`).
+            let mut merged: Map<String, Value> = rec.values().map(|(k, v)| (k.to_string(), v.clone())).collect();
+            for (name, value) in &normalized {
+                if value.is_null() {
+                    merged.remove(*name);
+                } else {
+                    merged.insert((*name).to_string(), value.clone());
+                }
+            }
+            let from = rec.get_str("phase").unwrap_or("Planung").to_string();
+            let to = merged.get("phase").and_then(Value::as_str).unwrap_or("Planung").to_string();
+            let reasons = crate::fortbildung::blockers(&merged, &from, &to);
+            if !reasons.is_empty() {
+                return Err(ServiceError::Invalid(format!("Die Fortbildung kann nicht in die Phase „{to}“ wechseln. {}.", reasons.join(". "))));
+            }
+        }
         let mut changed = false;
         for (name, value) in normalized {
             let current = rec.get(name).cloned().unwrap_or(Value::Null);
@@ -850,6 +867,64 @@ mod tests {
         assert_eq!(s.get(&spaet).unwrap().fields["status"], "Offen");
         s.save("auftrag", Some(&spaet), &map(json!({"status": "Erledigt", "erledigt_am": "2026-10-31"}))).unwrap();
         assert_eq!(s.get(&spaet).unwrap().fields["status"], "Erledigt");
+    }
+
+    #[test]
+    fn training_moves_through_its_phases_only_with_complete_data() {
+        let (mut s, _) = unlocked_service();
+        let id = s.save("fortbildung", None, &map(json!({"titel": "KI im Unterricht"}))).unwrap();
+        assert_eq!(s.get(&id).unwrap().fields["phase"], "Planung", "Vorgabe: Planung");
+
+        // Ohne Planungsangaben keine Ausschreibung. Die Meldung nennt, was fehlt.
+        let err = s.save("fortbildung", Some(&id), &map(json!({"phase": "Ausschreibung"}))).unwrap_err().to_string();
+        assert!(err.contains("Ausschreibung") && err.contains("Referent") && err.contains("Ort"), "{err}");
+        assert_eq!(s.get(&id).unwrap().fields["phase"], "Planung", "nichts wurde gespeichert");
+
+        // Angaben und Phase in einem Schritt: erlaubt, weil das Ergebnis vollständig ist.
+        s.save("fortbildung", Some(&id), &map(json!({
+            "referent": "Dr. Beispiel", "inhalt": "Grundlagen", "beginn": "2027-02-10T09:00", "ort": "Ulm", "teilnehmer_geplant": 25, "phase": "Ausschreibung"
+        }))).unwrap();
+        assert_eq!(s.get(&id).unwrap().fields["phase"], "Ausschreibung");
+
+        // Durchführung braucht die FIBS-Nummer.
+        assert!(s.save("fortbildung", Some(&id), &map(json!({"phase": "Durchführung"}))).unwrap_err().to_string().contains("FIBS"));
+        s.save("fortbildung", Some(&id), &map(json!({"fibs_nummer": "2027-1", "phase": "Durchführung"}))).unwrap();
+        s.save("fortbildung", Some(&id), &map(json!({"phase": "Nachbereitung", "checkliste_nachbereitung": "- [ ] Bescheinigungen\n- [ ] Abrechnung"}))).unwrap();
+
+        // Abschluss erst mit abgehakter Checkliste.
+        let err = s.save("fortbildung", Some(&id), &map(json!({"phase": "Abgeschlossen"}))).unwrap_err().to_string();
+        assert!(err.contains("2 offene Aufgaben"), "{err}");
+        s.save("fortbildung", Some(&id), &map(json!({"checkliste_nachbereitung": "- [x] Bescheinigungen\n- [x] Abrechnung", "phase": "Abgeschlossen"}))).unwrap();
+
+        // Zurück geht immer, auch wenn Angaben fehlen. Andere Felder lassen sich in jeder Phase ändern.
+        s.save("fortbildung", Some(&id), &map(json!({"referent": "", "phase": "Planung"}))).unwrap();
+        s.save("fortbildung", Some(&id), &map(json!({"notizen": "später ergänzt"}))).unwrap();
+        // Überspringen prüft jede Phase auf dem Weg.
+        let err = s.save("fortbildung", Some(&id), &map(json!({"phase": "Durchführung"}))).unwrap_err().to_string();
+        assert!(err.contains("Referent"), "{err}");
+        // Eine neue Fortbildung direkt in einer späteren Phase anzulegen, geht nur mit Angaben.
+        assert!(s.save("fortbildung", None, &map(json!({"titel": "Direkt", "phase": "Durchführung"}))).is_err());
+        assert!(matches!(s.save("fortbildung", None, &map(json!({"titel": "X", "phase": "Unsinn"}))), Err(ServiceError::Invalid(_))));
+    }
+
+    #[test]
+    fn requests_can_be_collected_and_assigned() {
+        let (mut s, _) = unlocked_service();
+        let schule = s.save("schule", None, &map(json!({"name": "Schule"}))).unwrap();
+        let kontakt = s.save("ansprechpartner", None, &map(json!({"name": "Frau Weber"}))).unwrap();
+        let b1 = s.save("bedarf", None, &map(json!({"thema": "KI im Unterricht", "schule": schule, "kontakt": kontakt, "interessenten": 8, "eingegangen_am": "2026-10-01"}))).unwrap();
+        let b2 = s.save("bedarf", None, &map(json!({"thema": "Tablets", "eingegangen_am": "2026-10-20"}))).unwrap();
+        assert_eq!(s.get(&b1).unwrap().fields["status"], "Offen");
+        // Neueste Anmeldung zuerst.
+        let themen: Vec<_> = s.list("bedarf").unwrap().iter().map(|v| v.fields["thema"].as_str().unwrap().to_string()).collect();
+        assert_eq!(themen, ["Tablets", "KI im Unterricht"]);
+
+        let fb = s.save("fortbildung", None, &map(json!({"titel": "KI-Tag"}))).unwrap();
+        s.save("bedarf", Some(&b1), &map(json!({"fortbildung": fb, "status": "Eingeplant"}))).unwrap();
+        assert_eq!(s.get(&b1).unwrap().fields["fortbildung"], json!(fb));
+        // Verweise müssen auf eine Fortbildung zeigen.
+        assert!(matches!(s.save("bedarf", Some(&b2), &map(json!({"fortbildung": schule}))), Err(ServiceError::Invalid(_))));
+        assert!(matches!(s.save("bedarf", None, &map(json!({"thema": "X", "status": "Vielleicht"}))), Err(ServiceError::Invalid(_))));
     }
 
     #[test]

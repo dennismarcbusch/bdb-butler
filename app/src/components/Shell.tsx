@@ -24,12 +24,14 @@ export function Shell({ configured, onStatusChanged }: Props) {
   const [focus, setFocus] = useState<{ kind: string; id: string; nonce: number } | null>(null);
   const [conflicts, setConflicts] = useState<RecordView[]>([]);
   const [overdue, setOverdue] = useState(0);
+  const [openRequests, setOpenRequests] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const { state: sync, run: runSync, schedule } = useSync(configured);
 
   const loadConflicts = useCallback(async () => {
     try {
       setOverdue(overdueCount(await api.list('auftrag'), todayIso()));
+      setOpenRequests((await api.list('bedarf')).filter((b) => b.fields.status === 'Offen').length);
       setConflicts(await api.conflicts());
     } catch (e) {
       setError(messageOf(e));
@@ -40,9 +42,10 @@ export function Shell({ configured, onStatusChanged }: Props) {
     api.kinds().then(setKinds, (e) => setError(messageOf(e)));
   }, []);
 
+  // Auch beim Wechsel der Ansicht neu laden: Einträge können von außen entstehen (KI-Zugriff, anderer Rechner).
   useEffect(() => {
     void loadConflicts();
-  }, [loadConflicts, sync.revision]);
+  }, [loadConflicts, sync.revision, view]);
 
   useEffect(() => {
     if (configured) void runSync();
@@ -94,6 +97,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
             <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
               {k.label_plural}
               {k.kind === 'auftrag' && overdue > 0 ? ` (${overdue} überfällig)` : ''}
+              {k.kind === 'bedarf' && openRequests > 0 ? ` (${openRequests} offen)` : ''}
             </button>
           ))}
           <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>

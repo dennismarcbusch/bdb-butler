@@ -6,6 +6,7 @@ import { matches, recordMeta, titleOf } from '../form';
 import type { KindDef, RecordView } from '../types';
 import { RecordForm } from './RecordForm';
 import { RelatedList } from './RelatedList';
+import { TrainingPanel } from './TrainingPanel';
 import { TripPanel } from './TripPanel';
 
 interface Props {
@@ -132,6 +133,18 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
         {current && isTrips && (
           <TripPanel
             trip={current}
+            revision={revision + localChanges}
+            onChanged={() => {
+              setLocalChanges((n) => n + 1);
+              void load();
+              onChanged();
+            }}
+          />
+        )}
+        {current && kind.kind === 'fortbildung' && (
+          <TrainingPanel
+            training={current}
+            kinds={kinds}
             revision={revision + localChanges}
             onChanged={() => {
               setLocalChanges((n) => n + 1);

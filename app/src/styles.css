@@ -221,3 +221,11 @@ div.inline select { width: auto; }
 .signature-preview { margin: 0.6rem 0; }
 .signature-preview img { max-width: 20rem; max-height: 6rem; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; display: block; margin-bottom: 0.3rem; }
 .list select { margin: 0.4rem 0 0; }
+
+.training { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.4rem; }
+.phases { display: flex; flex-wrap: wrap; gap: 0.3rem; list-style: none; padding: 0; margin: 0.4rem 0; }
+.phases li { padding: 0.25rem 0.7rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 0.88rem; }
+.phases li.past { color: var(--text); border-color: var(--ok); }
+.phases li.current { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.checklists, .requests { list-style: none; padding: 0; margin: 0.3rem 0; display: grid; gap: 0.2rem; }
+.training h4 { margin: 0.9rem 0 0.2rem; font-size: 0.95rem; }
