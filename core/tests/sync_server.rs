@@ -189,6 +189,35 @@ fn entries_travel_between_devices() {
 }
 
 #[test]
+fn unreadable_entries_are_skipped_reported_and_retried() {
+    let Some(server) = TestServer::start() else { return };
+    let (mut a, mut b) = two_devices(&server);
+
+    let before = a.new_record("schule", &[("name", json!("Vorher"))]);
+    a.sync();
+    // Ein Eintrag, den dieser Tresor nicht lesen kann (beschädigt oder aus einer neueren Fassung).
+    let foreign = Vault::create("ein anderer tresor", FAST).unwrap().0;
+    let blob = foreign.encrypt_entry("kaputt-1", b"{}").unwrap();
+    assert!(matches!(server.client().push("kaputt-1", 0, &blob).unwrap(), sync::PushResult::Accepted { .. }));
+    let after = a.new_record("schule", &[("name", json!("Nachher"))]);
+    a.sync();
+
+    // B spielt alles Lesbare ein und meldet den Rest, statt abzubrechen.
+    let report = b.sync();
+    assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+    assert!(report.warnings[0].contains("kaputt-1"));
+    assert_eq!(b.get(&before).unwrap().get_str("name"), Some("Vorher"));
+    assert_eq!(b.get(&after).unwrap().get_str("name"), Some("Nachher"));
+
+    // Beim nächsten Abgleich wird er erneut versucht, Neues kommt weiter an.
+    let later = a.new_record("schule", &[("name", json!("Später"))]);
+    a.sync();
+    let report = b.sync();
+    assert_eq!(report.warnings.len(), 1);
+    assert_eq!(b.get(&later).unwrap().get_str("name"), Some("Später"));
+}
+
+#[test]
 fn server_stores_only_ciphertext() {
     let Some(server) = TestServer::start() else { return };
     let (mut a, _) = two_devices(&server);

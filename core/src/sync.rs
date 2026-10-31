@@ -300,6 +300,10 @@ pub fn sync(store: &mut Store, vault: &Vault, clock: &mut Clock, client: &SyncCl
     Ok(report)
 }
 
+/// Holt alle neuen Einträge. Ein Eintrag, der sich nicht lesen oder einspielen lässt (beschädigt, aus einer neueren
+/// App-Fassung, mit anderem Typ als lokal), hält den Abgleich nicht auf: Er wird übersprungen und gemeldet. Der
+/// gespeicherte Cursor bleibt vor dem ersten übersprungenen Eintrag stehen, damit er beim nächsten Abgleich (zum
+/// Beispiel nach einem Update der App) erneut versucht wird. Alle anderen Einträge werden trotzdem eingespielt.
 fn pull_all(
     store: &mut Store,
     vault: &Vault,
@@ -307,19 +311,38 @@ fn pull_all(
     client: &SyncClient,
     report: &mut SyncReport,
 ) -> Result<()> {
+    let mut since = store.cursor()?;
+    let mut keep_before: Option<i64> = None;
+    let mut skipped: Vec<String> = Vec::new();
     loop {
-        let since = store.cursor()?;
         let page = client.pull(since, PAGE_SIZE)?;
-        let mut highest = since;
         for entry in &page.entries {
-            apply(store, vault, clock, entry, report)?;
-            highest = highest.max(entry.seq);
+            match apply(store, vault, clock, entry, report) {
+                Ok(()) => {}
+                Err(SyncError::Store(StoreError::Crypto(_) | StoreError::Record(_))) => {
+                    skipped.push(entry.id.clone());
+                    keep_before.get_or_insert(entry.seq - 1);
+                }
+                Err(e) => return Err(e),
+            }
+            since = since.max(entry.seq);
         }
-        store.set_cursor(highest)?;
+        store.set_cursor(keep_before.unwrap_or(since))?;
         if !page.more || page.entries.is_empty() {
-            return Ok(());
+            break;
         }
     }
+    if !skipped.is_empty() {
+        let shown: Vec<&str> = skipped.iter().take(5).map(String::as_str).collect();
+        report.warnings.push(format!(
+            "{} Einträge vom Server ließen sich nicht einspielen (beschädigt oder aus einer neueren App-Fassung) und \
+             werden beim nächsten Abgleich erneut versucht: {}{}",
+            skipped.len(),
+            shown.join(", "),
+            if skipped.len() > shown.len() { " …" } else { "" },
+        ));
+    }
+    Ok(())
 }
 
 fn apply(
