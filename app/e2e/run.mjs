@@ -82,13 +82,18 @@ async function startBridge(binary) {
   return port;
 }
 
-async function bridgeCall(port, command, args) {
+/** Ruft einen Befehl der Brücke auf und liefert die ganze Antwort (`ok`, `data` oder `error`). */
+async function bridgeRaw(port, command, args) {
   const r = await fetch(`http://127.0.0.1:${port}/api/${command}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: args === undefined ? '' : JSON.stringify(args),
   });
-  const body = await r.json();
+  return r.json();
+}
+
+async function bridgeCall(port, command, args) {
+  const body = await bridgeRaw(port, command, args);
   assert.ok(body.ok, `${command}: ${JSON.stringify(body.error)}`);
   return body.data;
 }
@@ -216,13 +221,22 @@ async function main() {
   const serverBinary = join(tempDir('bdb-e2e-bin-'), 'bdbb-server');
   run('go', ['build', '-o', serverBinary, '.'], { cwd: join(repo, 'server') });
 
-  // Go-Server
+  // Go-Server. Jeder Start bekommt eine neue, leere Datenbank (für „Server neu befüllen“).
   const serverPort = await freePort();
-  start(serverBinary, [], {
-    env: { ...process.env, BDBB_TOKEN: TOKEN, BDBB_ADDR: `127.0.0.1:${serverPort}`, BDBB_DB: join(tempDir('bdb-e2e-server-'), 'server.db') },
-  });
   const serverUrl = `http://127.0.0.1:${serverPort}`;
-  await waitFor(`${serverUrl}/healthz`, 'Go-Server');
+  let serverProcess = null;
+  const startServer = async () => {
+    serverProcess = start(serverBinary, [], {
+      env: { ...process.env, BDBB_TOKEN: TOKEN, BDBB_ADDR: `127.0.0.1:${serverPort}`, BDBB_DB: join(tempDir('bdb-e2e-server-'), 'server.db') },
+    });
+    await waitFor(`${serverUrl}/healthz`, 'Go-Server');
+  };
+  const stopServer = () =>
+    new Promise((resolve) => {
+      serverProcess.once('exit', resolve);
+      serverProcess.kill();
+    });
+  await startServer();
 
   // Zwei Kerne: A wird über die Oberfläche bedient, B simuliert einen zweiten Rechner über die Brücke.
   const bridgeA = await startBridge(bridgeBinary);
@@ -1214,15 +1228,70 @@ async function main() {
       assert.equal(await panel.getByRole('checkbox', { name: /Hotelrechnung: hotel_rechnung\.pdf/ }).isChecked(), false);
     });
 
+    await step('Server neu befüllen: leerer Server, beide Rechner kommen zum gleichen Stand', async () => {
+      await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
+      const syncA = async () => {
+        await page.getByRole('button', { name: 'Jetzt abgleichen' }).click();
+        await page.getByTestId('sync-status').filter({ hasText: 'Abgeglichen' }).waitFor();
+      };
+      await syncA();
+      await bridgeCall(bridgeB, 'sync');
+      await syncA();
+      const byId = (list) => [...list].sort((x, y) => x.id.localeCompare(y.id));
+      const before = byId(await bridgeCall(bridgeA, 'list_all'));
+      assert.deepEqual(byId(await bridgeCall(bridgeB, 'list_all')), before, 'vorher gleicher Stand');
+      assert.ok(before.length > 5, 'genug Einträge für den Test');
+
+      // Der Server verliert seinen Bestand (neu aufgesetzt). Die Oberfläche bietet das Neubefüllen an.
+      await stopServer();
+      await startServer();
+      const region = page.getByRole('region', { name: 'Server neu befüllen' });
+      assert.equal(await region.count(), 0, 'ohne Anlass kein Angebot');
+      await page.getByRole('button', { name: 'Jetzt abgleichen' }).click();
+      await page.getByRole('alert').filter({ hasText: 'Der Server ist leer' }).waitFor();
+      await region.waitFor();
+      await page.getByTestId('sync-status').filter({ hasText: 'Abgleich fehlgeschlagen' }).waitFor();
+
+      // Erst nach Bestätigung, Abbrechen ändert nichts.
+      await region.getByRole('button', { name: 'Server neu befüllen …' }).click();
+      await region.getByRole('button', { name: 'Abbrechen' }).click();
+      assert.equal((await bridgeRaw(bridgeB, 'sync')).error?.code, 'server_reset', 'B erkennt den leeren Server');
+      await shot(page, '27-server-neu-befuellen');
+      await region.getByRole('button', { name: 'Server neu befüllen …' }).click();
+      await region.getByRole('button', { name: 'Ja, Server neu befüllen' }).click();
+      await page.getByText('Der Server ist wieder in Betrieb').waitFor();
+      await region.waitFor({ state: 'detached' });
+      await page.getByTestId('sync-status').filter({ hasText: 'Abgeglichen' }).waitFor();
+
+      // B merkt, dass A neu befüllt hat, und schließt sich an. Gleiche Werte ergeben keine Konflikte.
+      const refilled = await bridgeRaw(bridgeB, 'sync');
+      assert.equal(refilled.error?.code, 'server_reset');
+      assert.match(refilled.error.message, /anderer Rechner hat den Server neu befüllt/);
+      const report = await bridgeCall(bridgeB, 'server_refill');
+      assert.equal(report.conflicts, 0, JSON.stringify(report));
+      await page.getByRole('button', { name: 'Jetzt abgleichen' }).click();
+      await page.getByTestId('sync-status').filter({ hasText: 'Abgeglichen' }).waitFor();
+      assert.deepEqual(byId(await bridgeCall(bridgeA, 'list_all')), before, 'A unverändert');
+      assert.deepEqual(byId(await bridgeCall(bridgeB, 'list_all')), before, 'B gleicher Stand');
+
+      // Danach geht es normal weiter.
+      await bridgeCall(bridgeB, 'save', { kind: 'schule', fields: { name: 'Nach dem Neubefüllen' } });
+      await bridgeCall(bridgeB, 'sync');
+      await page.getByRole('button', { name: 'Jetzt abgleichen' }).click();
+      await page.getByTestId('sync-status').filter({ hasText: 'Abgeglichen' }).waitFor();
+      assert.ok((await bridgeCall(bridgeA, 'list', { kind: 'schule' })).some((r) => r.fields.name === 'Nach dem Neubefüllen'));
+    });
+
     await step('Keine unerwarteten Fehler in der Browser-Konsole', async () => {
       // Die Brücke antwortet auf Fehler mit HTTP 400, die der Test absichtlich auslöst (falsches Passwort,
       // fehlende Pflichtfelder, ungültiger Recovery-Key, falsche Reihenfolge der Reisezeiten, Mailversand mit
-      // falschem Passwort, gesperrte Phasenwechsel der Fortbildung). Der Browser protokolliert sie als Ladefehler.
+      // falschem Passwort, gesperrte Phasenwechsel der Fortbildung, Abgleich mit leerem Server). Der Browser
+      // protokolliert sie als Ladefehler.
       const expected = /^Failed to load resource: the server responded with a status of 400/;
       const unexpected = consoleErrors.filter((m) => !expected.test(m));
       assert.deepEqual(unexpected, [], unexpected.join('\n'));
       const provoked = consoleErrors.length - unexpected.length;
-      assert.equal(provoked, 11, `${provoked} statt 11 erwarteter Fehlerantworten`);
+      assert.equal(provoked, 12, `${provoked} statt 12 erwarteter Fehlerantworten`);
     });
   } finally {
     await browser.close();

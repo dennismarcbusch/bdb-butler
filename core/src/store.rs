@@ -158,6 +158,52 @@ impl Store {
         self.meta_set(META_KEYRING_VERSION, version.to_string().as_bytes())
     }
 
+    /// Höchste Folgenummer des Servers, die dieser Rechner kennt: der Cursor oder eine höhere Folgenummer eines
+    /// eigenen gesendeten Eintrags. Liefert der Server ein kleineres `latest`, hat er Stände verloren.
+    pub fn known_seq(&self) -> Result<i64> {
+        let max: i64 = self.conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM entries", [], |r| r.get(0))?;
+        Ok(max.max(self.cursor()?))
+    }
+
+    /// Der Eintrag mit der höchsten Folgenummer samt dem Blob, den der Server unter dieser Nummer hat (`base`).
+    /// Ein unveränderter Server hat unter dieser Folgenummer genau diesen Blob oder gar nichts mehr (wenn der
+    /// Eintrag seitdem neu geschrieben wurde), nie einen anderen Eintrag. Siehe [`crate::sync`].
+    pub fn witness(&self) -> Result<Option<RemoteEntry>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, seq, base FROM entries WHERE seq > 0 AND base IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| Ok(RemoteEntry { id: r.get(0)?, seq: r.get(1)?, blob: r.get(2)? }),
+            )
+            .optional()?)
+    }
+
+    /// Bereitet das Neubefüllen des Servers vor (siehe `docs/ARCHITEKTUR.md`, „Server neu befüllen“): Cursor auf 0,
+    /// alle Einträge ohne Folgenummer und zum Senden vorgemerkt, dazu der Keyring, mit dem es weitergeht. Alles in
+    /// einem Schritt, damit kein halber Zustand bleibt.
+    ///
+    /// `base` (der zuletzt synchronisierte Stand) bleibt erhalten. Er gehört zu keiner Folgenummer mehr, ist aber
+    /// weiter der richtige Vergleichsstand für den Dreiwegevergleich: Ein Feld, das seit dem letzten Abgleich nur
+    /// auf einer Seite geändert wurde, ist auch jetzt kein Konflikt. Ohne ihn würde jedes Feld, in dem eine ältere
+    /// Sicherung vom lokalen Stand abweicht, als Konflikt gemeldet.
+    pub fn reset_server_state(&mut self, keyring: &Keyring, keyring_version: i64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let set = |key: &str, value: &[u8]| {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+        };
+        set(META_CURSOR, b"0")?;
+        set(META_KEYRING, keyring.to_json().as_bytes())?;
+        set(META_KEYRING_VERSION, keyring_version.to_string().as_bytes())?;
+        tx.execute("UPDATE entries SET seq = 0, dirty = 1", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ----- Geheimnisse dieses Rechners --------------------------------------------------------------------
 
     /// Geheimnisse dieses Rechners (Sync-Token, MCP-Token, SMTP-Passwort) liegen mit dem Datenschlüssel
@@ -494,6 +540,37 @@ mod tests {
         let (_, keyring, _) = Vault::create("passwort", FAST).unwrap();
         s.set_keyring(&keyring, 3).unwrap();
         assert_eq!(s.keyring().unwrap().unwrap(), (keyring, 3));
+    }
+
+    #[test]
+    fn known_seq_witness_and_reset() {
+        let v = vault();
+        let mut d = device(&v, "aa");
+        assert_eq!(d.store.known_seq().unwrap(), 0);
+        assert_eq!(d.store.witness().unwrap(), None);
+
+        d.store.put_record(&v, "s1", &school(&mut d.clock, "A")).unwrap();
+        d.store.put_record(&v, "s2", &school(&mut d.clock, "B")).unwrap();
+        let pending = d.store.pending().unwrap();
+        d.store.mark_pushed("s1", 4, &pending[0].blob).unwrap();
+        d.store.mark_pushed("s2", 9, &pending[1].blob).unwrap();
+        d.store.set_cursor(6).unwrap();
+        // Gesendete Einträge können über dem Cursor liegen.
+        assert_eq!(d.store.known_seq().unwrap(), 9);
+        let witness = d.store.witness().unwrap().unwrap();
+        assert_eq!((witness.id.as_str(), witness.seq, &witness.blob), ("s2", 9, &pending[1].blob));
+
+        let (_, keyring, _) = Vault::create("passwort", FAST).unwrap();
+        d.store.reset_server_state(&keyring, 0).unwrap();
+        assert_eq!(d.store.cursor().unwrap(), 0);
+        assert_eq!(d.store.known_seq().unwrap(), 0);
+        assert_eq!(d.store.witness().unwrap(), None);
+        assert_eq!(d.store.keyring().unwrap().unwrap(), (keyring, 0));
+        let pending = d.store.pending().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|p| p.base_seq == 0));
+        // Der zuletzt synchronisierte Stand bleibt für den Dreiwegevergleich erhalten.
+        assert!(d.store.row("s1").unwrap().unwrap().base.is_some());
     }
 
     #[test]

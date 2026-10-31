@@ -27,7 +27,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
   const [overdue, setOverdue] = useState(0);
   const [openRequests, setOpenRequests] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const { state: sync, run: runSync, schedule } = useSync(configured);
+  const { state: sync, run: runSync, refill: refillServer, schedule } = useSync(configured);
 
   const loadConflicts = useCallback(async () => {
     try {
@@ -153,7 +153,14 @@ export function Shell({ configured, onStatusChanged }: Props) {
           <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />
         )}
         {view === 'settings' && (
-          <Settings kinds={kinds} configured={configured} sync={sync} onSync={() => void runSync()} onStatusChanged={onStatusChanged} />
+          <Settings
+            kinds={kinds}
+            configured={configured}
+            sync={sync}
+            onSync={() => void runSync()}
+            onRefill={refillServer}
+            onStatusChanged={onStatusChanged}
+          />
         )}
       </main>
     </div>

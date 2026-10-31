@@ -49,35 +49,75 @@ fn server_binary() -> Option<&'static PathBuf> {
 }
 
 struct TestServer {
-    child: Child,
+    child: Option<Child>,
     url: String,
+    port: u16,
     dir: PathBuf,
 }
 
 impl TestServer {
     fn start() -> Option<Self> {
-        let Some(binary) = server_binary() else {
+        if server_binary().is_none() {
             eprintln!("Go nicht gefunden, Integrationstest übersprungen");
             return None;
-        };
+        }
         let port = {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.local_addr().unwrap().port()
         };
         let dir = std::env::temp_dir().join(format!("bdbb-it-{}", random_name()));
         std::fs::create_dir_all(&dir).unwrap();
-        let child = Command::new(binary)
+        let url = format!("http://127.0.0.1:{port}");
+        let mut server = TestServer { child: None, url, port, dir };
+        server.spawn();
+        Some(server)
+    }
+
+    fn spawn(&mut self) {
+        let child = Command::new(server_binary().unwrap())
             .env("BDBB_TOKEN", TOKEN)
-            .env("BDBB_ADDR", format!("127.0.0.1:{port}"))
-            .env("BDBB_DB", dir.join("server.db"))
+            .env("BDBB_ADDR", format!("127.0.0.1:{}", self.port))
+            .env("BDBB_DB", self.dir.join("server.db"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("Server starten");
-        let url = format!("http://127.0.0.1:{port}");
-        let server = TestServer { child, url, dir };
-        server.wait_until_ready();
-        Some(server)
+        self.child = Some(child);
+        self.wait_until_ready();
+    }
+
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// Kopiert die SQLite-Datei des Servers (samt Write-Ahead-Log) bei angehaltenem Server, wie eine Sicherung.
+    fn backup(&mut self) -> PathBuf {
+        self.stop();
+        let target = std::env::temp_dir().join(format!("bdbb-it-sicherung-{}", random_name()));
+        std::fs::create_dir_all(&target).unwrap();
+        for entry in std::fs::read_dir(&self.dir).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::copy(&path, target.join(path.file_name().unwrap())).unwrap();
+        }
+        self.spawn();
+        target
+    }
+
+    /// Spielt eine Sicherung zurück (`None`: Server mit leerer Datenbank, zum Beispiel neu aufgesetzt).
+    fn restore(&mut self, backup: Option<&Path>) {
+        self.stop();
+        std::fs::remove_dir_all(&self.dir).unwrap();
+        std::fs::create_dir_all(&self.dir).unwrap();
+        if let Some(backup) = backup {
+            for entry in std::fs::read_dir(backup).unwrap() {
+                let path = entry.unwrap().path();
+                std::fs::copy(&path, self.dir.join(path.file_name().unwrap())).unwrap();
+            }
+        }
+        self.spawn();
     }
 
     fn wait_until_ready(&self) {
@@ -108,8 +148,7 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -388,7 +427,8 @@ fn unreachable_server_is_a_network_error() {
 
 mod service_level {
     use super::*;
-    use bdb_core::service::{Config, Service, ServiceError};
+    use bdb_core::service::{Config, RecordView, Service, ServiceError};
+    use bdb_core::sync::ResetReason;
     use serde_json::Map;
 
     fn service(server: &TestServer) -> Service {
@@ -557,5 +597,199 @@ mod service_level {
         b.join_vault(PASSWORD).unwrap();
         b.sync().unwrap();
         assert_eq!(b.get(&id).unwrap().fields["name"], "Bleibt erhalten");
+    }
+
+    fn reset_reason(result: Result<sync::SyncReport, ServiceError>) -> ResetReason {
+        match result {
+            Err(ServiceError::Sync(SyncError::ServerReset(reason))) => reason,
+            other => panic!("Erwartet: Server neu befüllen, erhalten: {other:?}"),
+        }
+    }
+
+    /// Alle Einträge (ohne gelöschte und Konflikte), nach ID sortiert.
+    fn state(s: &mut Service) -> Vec<RecordView> {
+        let mut all = s.list_all().unwrap();
+        all.sort_by(|a, b| a.id.cmp(&b.id));
+        all
+    }
+
+    /// Alle Rechner haben denselben Stand, ohne Konflikteinträge, und ein weiterer Abgleich ändert nichts.
+    fn assert_converged(devices: &mut [&mut Service]) {
+        let expected = state(devices[0]);
+        for device in devices.iter_mut() {
+            assert_eq!(device.sync().unwrap(), sync::SyncReport::default());
+            assert_eq!(state(device), expected);
+            assert!(device.conflicts().unwrap().is_empty(), "{:?}", device.conflicts().unwrap());
+        }
+    }
+
+    #[test]
+    fn empty_server_is_refilled_and_all_devices_converge() {
+        let Some(mut server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+
+        let s1 = a.save("schule", None, &fields(json!({"name": "Grundschule am See", "ort": "Ulm"}))).unwrap();
+        let s2 = a.save("schule", None, &fields(json!({"name": "Mittelschule"}))).unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        let p1 = b.save("ansprechpartner", None, &fields(json!({"name": "Frau Weber", "schule": s1}))).unwrap();
+        b.sync().unwrap();
+        a.sync().unwrap();
+
+        // Der Server verliert alles (neu aufgesetzt). Beide Rechner erkennen das und senden nichts.
+        server.restore(None);
+        assert_eq!(reset_reason(a.sync()), ResetReason::Empty);
+        assert_eq!(reset_reason(b.sync()), ResetReason::Empty);
+        assert!(server.client().get_keyring().unwrap().is_none());
+
+        // Bis zum Neubefüllen arbeiten beide weiter, an verschiedenen Feldern.
+        a.save("schule", Some(&s2), &fields(json!({"ort": "Augsburg"}))).unwrap();
+        b.save("schule", Some(&s1), &fields(json!({"ort": "Neu-Ulm"}))).unwrap();
+        let s3 = b.save("schule", None, &fields(json!({"name": "Nur auf B"}))).unwrap();
+
+        // A befüllt den Server neu.
+        let report = a.refill_server().unwrap();
+        assert_eq!(report.conflicts, 0);
+        assert!(server.client().get_keyring().unwrap().is_some());
+
+        // B erkennt, dass ein anderer Rechner neu befüllt hat, und schließt sich an. Gleiche Werte ergeben keine
+        // Konflikte, die Änderungen beider Seiten bleiben erhalten.
+        assert_eq!(reset_reason(b.sync()), ResetReason::Refilled);
+        let report = b.refill_server().unwrap();
+        assert_eq!(report.conflicts, 0, "{report:?}");
+        a.sync().unwrap();
+
+        assert_converged(&mut [&mut a, &mut b]);
+        assert_eq!(a.get(&s1).unwrap().fields["ort"], "Neu-Ulm");
+        assert_eq!(b.get(&s2).unwrap().fields["ort"], "Augsburg");
+        assert_eq!(a.get(&s3).unwrap().fields["name"], "Nur auf B");
+        assert_eq!(a.get(&p1).unwrap().fields["schule"], json!(s1));
+
+        // Ein neuer Rechner bekommt den vollständigen Stand, und es geht normal weiter.
+        let mut c = service(&server);
+        c.join_vault(PASSWORD).unwrap();
+        c.sync().unwrap();
+        c.save("schule", Some(&s3), &fields(json!({"ort": "Kempten"}))).unwrap();
+        c.sync().unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        assert_converged(&mut [&mut a, &mut b, &mut c]);
+        assert_eq!(b.get(&s3).unwrap().fields["ort"], "Kempten");
+
+        // Das Passwort gilt weiter.
+        a.lock();
+        a.unlock(PASSWORD).unwrap();
+    }
+
+    #[test]
+    fn older_backup_is_refilled_and_newer_device_states_win() {
+        let Some(mut server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+        let mut c = service(&server);
+        c.join_vault(PASSWORD).unwrap();
+
+        let s1 = a.save("schule", None, &fields(json!({"name": "Alt", "ort": "Ulm"}))).unwrap();
+        let s2 = a.save("schule", None, &fields(json!({"name": "Zwei"}))).unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        c.sync().unwrap();
+
+        // Sicherung, danach geht die Arbeit auf A und B weiter. C gleicht nicht mehr ab.
+        let backup = server.backup();
+        a.save("schule", Some(&s1), &fields(json!({"name": "Neu"}))).unwrap();
+        let s3 = a.save("schule", None, &fields(json!({"name": "Nach der Sicherung"}))).unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        b.save("schule", Some(&s2), &fields(json!({"ort": "Bonn"}))).unwrap();
+        b.sync().unwrap();
+        a.sync().unwrap();
+
+        // Die Sicherung wird zurückgespielt. C passt noch dazu und schreibt weiter, bevor A und B abgleichen. Damit
+        // liegt `latest` wieder so hoch wie vor dem Zurückspielen, unter denselben Folgenummern stehen aber andere
+        // Einträge.
+        server.restore(Some(&backup));
+        let c1 = c.save("schule", None, &fields(json!({"name": "Von C, eins"}))).unwrap();
+        let c2 = c.save("schule", None, &fields(json!({"name": "Von C, zwei"}))).unwrap();
+        let c3 = c.save("schule", None, &fields(json!({"name": "Von C, drei"}))).unwrap();
+        c.sync().unwrap();
+        assert_eq!(reset_reason(a.sync()), ResetReason::Behind);
+        assert_eq!(reset_reason(b.sync()), ResetReason::Behind);
+
+        // A befüllt neu: Je Feld gewinnt der jüngere Stand, also der der Rechner. Weil der zuletzt synchronisierte
+        // Stand als Vergleich erhalten bleibt, ist der ältere Serverstand kein Konflikt.
+        let report = a.refill_server().unwrap();
+        assert_eq!(report.conflicts, 0, "{report:?}");
+        assert_eq!(a.get(&s1).unwrap().fields["name"], "Neu");
+
+        // B und C schließen sich an.
+        assert_eq!(reset_reason(b.sync()), ResetReason::Refilled);
+        assert_eq!(b.refill_server().unwrap().conflicts, 0);
+        assert_eq!(reset_reason(c.sync()), ResetReason::Refilled);
+        assert_eq!(c.refill_server().unwrap().conflicts, 0);
+        a.sync().unwrap();
+        b.sync().unwrap();
+
+        assert_converged(&mut [&mut a, &mut b, &mut c]);
+        for device in [&mut a, &mut b, &mut c] {
+            assert_eq!(device.get(&s1).unwrap().fields["name"], "Neu");
+            assert_eq!(device.get(&s1).unwrap().fields["ort"], "Ulm");
+            assert_eq!(device.get(&s2).unwrap().fields["ort"], "Bonn");
+            assert_eq!(device.get(&s3).unwrap().fields["name"], "Nach der Sicherung");
+            for id in [&c1, &c2, &c3] {
+                assert!(device.get(id).is_ok());
+            }
+        }
+        let _ = std::fs::remove_dir_all(backup);
+    }
+
+    #[test]
+    fn older_backup_with_older_keyring_keeps_the_new_password() {
+        let Some(mut server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let id = a.save("schule", None, &fields(json!({"name": "A"}))).unwrap();
+        a.sync().unwrap();
+        let backup = server.backup();
+
+        // Nach der Sicherung ändert sich das Passwort. Die Sicherung hat noch den alten Keyring.
+        a.change_password(PASSWORD, "ein neues langes passwort").unwrap();
+        server.restore(Some(&backup));
+        assert_eq!(reset_reason(a.sync()), ResetReason::Behind);
+        a.refill_server().unwrap();
+
+        // Der Keyring dieses Rechners ersetzt den der Sicherung: Es gilt das neue Passwort, auch für neue Rechner.
+        a.lock();
+        assert!(matches!(a.unlock(PASSWORD), Err(ServiceError::WrongSecret)));
+        a.unlock("ein neues langes passwort").unwrap();
+        let mut b = service(&server);
+        assert!(matches!(b.join_vault(PASSWORD), Err(ServiceError::WrongSecret)));
+        let mut b = service(&server);
+        b.join_vault("ein neues langes passwort").unwrap();
+        b.sync().unwrap();
+        assert_eq!(b.get(&id).unwrap().fields["name"], "A");
+        let _ = std::fs::remove_dir_all(backup);
+    }
+
+    #[test]
+    fn refill_does_not_overwrite_a_foreign_keyring() {
+        let Some(mut server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        a.save("schule", None, &fields(json!({"name": "A"}))).unwrap();
+        a.sync().unwrap();
+
+        // Auf dem neu aufgesetzten Server hat jemand einen anderen Tresor angelegt.
+        server.restore(None);
+        let (_, foreign, _) = bdb_core::crypto::Vault::create("ein ganz anderes passwort", FAST).unwrap();
+        server.client().put_keyring(0, &foreign).unwrap();
+        assert!(matches!(a.refill_server(), Err(ServiceError::OtherVaultOnServer)));
+        assert_eq!(server.client().get_keyring().unwrap().unwrap().0, foreign);
+        assert!(server.client().pull(0, 10).unwrap().entries.is_empty());
     }
 }

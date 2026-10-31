@@ -153,6 +153,12 @@ pub struct Keyring {
     /// Einführung angelegt wurden. Ältere Clients ignorieren das Feld.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "b64_opt")]
     mac: Option<Vec<u8>>,
+    /// Bestandskennung: Zufallswert, den jedes Neubefüllen des Servers neu setzt (siehe
+    /// `docs/ARCHITEKTUR.md`, „Server neu befüllen“). Weicht sie auf dem Server von der lokalen ab, hat ein
+    /// anderer Rechner den Server neu befüllt, und die Folgenummern dieses Rechners gelten nicht mehr. Fehlt, solange
+    /// der Server nie neu befüllt wurde. Sie ist von der Prüfsumme abgedeckt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    epoch: Option<String>,
 }
 
 impl Keyring {
@@ -169,7 +175,26 @@ impl Keyring {
             return Err(Error::InvalidKeyring);
         }
         keyring.kdf.params.validate()?;
+        if let Some(epoch) = &keyring.epoch {
+            if !valid_epoch(epoch) {
+                return Err(Error::InvalidKeyring);
+            }
+        }
         Ok(keyring)
+    }
+
+    /// Bestandskennung (siehe Feld `epoch`).
+    pub fn epoch(&self) -> Option<&str> {
+        self.epoch.as_deref()
+    }
+
+    /// Derselbe Keyring mit einer neuen, zufälligen Bestandskennung. Er ist danach nicht versiegelt und muss mit
+    /// [`Vault::seal_keyring`] eine neue Prüfsumme bekommen.
+    pub fn with_new_epoch(&self) -> Result<Keyring> {
+        let mut bytes = [0u8; 16];
+        random_fill(&mut bytes)?;
+        let epoch: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        Ok(Keyring { epoch: Some(epoch), mac: None, ..self.clone() })
     }
 
     /// Hat der Keyring eine Prüfsumme? (Ältere Keyrings haben keine, siehe [`Vault::seal_keyring`].)
@@ -192,8 +217,17 @@ impl Keyring {
         part(&self.kdf.salt);
         part(&self.wrapped_by_password);
         part(&self.wrapped_by_recovery);
+        // Nur vorhanden, wenn gesetzt: Prüfsummen älterer Keyrings ohne Bestandskennung bleiben gültig.
+        if let Some(epoch) = &self.epoch {
+            part(epoch.as_bytes());
+        }
         out
     }
+}
+
+/// Bestandskennung: 1 bis 64 Zeichen aus Buchstaben, Ziffern und `-`.
+fn valid_epoch(epoch: &str) -> bool {
+    (1..=64).contains(&epoch.len()) && epoch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// Recovery-Key: 256 Bit, angezeigt als Base32 in Vierergruppen.
@@ -289,6 +323,7 @@ impl Vault {
             wrapped_by_password,
             wrapped_by_recovery,
             mac: None,
+            epoch: None,
         };
         let vault = Vault::from_data_key(data_key);
         let keyring = vault.seal_keyring(&keyring);
@@ -330,6 +365,7 @@ impl Vault {
             wrapped_by_password,
             wrapped_by_recovery: keyring.wrapped_by_recovery.clone(),
             mac: None,
+            epoch: keyring.epoch.clone(),
         }))
     }
 
@@ -343,6 +379,7 @@ impl Vault {
             wrapped_by_password: keyring.wrapped_by_password.clone(),
             wrapped_by_recovery,
             mac: None,
+            epoch: keyring.epoch.clone(),
         });
         Ok((new_keyring, recovery))
     }
@@ -697,6 +734,45 @@ mod tests {
         assert!(Vault::unlock_with_recovery(&old, &recovery.to_display()).is_ok());
         assert!(!old.to_json().contains("mac"));
         assert!(vault.verify_keyring(&vault.seal_keyring(&old)));
+    }
+
+    #[test]
+    fn epoch_is_covered_by_the_mac_and_survives_password_changes() {
+        let (vault, keyring, recovery) = new_vault();
+        assert_eq!(keyring.epoch(), None);
+
+        let fresh = keyring.with_new_epoch().unwrap();
+        assert!(!fresh.is_sealed());
+        let sealed = vault.seal_keyring(&fresh);
+        let epoch = sealed.epoch().unwrap().to_string();
+        assert_eq!(epoch.len(), 32);
+        assert_ne!(keyring.with_new_epoch().unwrap().epoch(), Some(epoch.as_str()));
+        assert!(vault.verify_keyring(&sealed));
+        let again = Keyring::from_json(&sealed.to_json()).unwrap();
+        assert_eq!(again, sealed);
+        assert!(Vault::unlock_with_recovery(&again, &recovery.to_display()).is_ok());
+
+        // Der Server kann die Kennung nicht unbemerkt austauschen oder entfernen.
+        let mut swapped = sealed.clone();
+        swapped.epoch = Some("abc".into());
+        assert!(!vault.verify_keyring(&swapped));
+        let mut removed = sealed.clone();
+        removed.epoch = None;
+        assert!(!vault.verify_keyring(&removed));
+
+        // Passwortwechsel und neuer Recovery-Key behalten die Kennung.
+        let changed = vault.change_password(&sealed, "neues passwort", FAST).unwrap();
+        assert_eq!(changed.epoch(), Some(epoch.as_str()));
+        assert!(vault.verify_keyring(&changed));
+        let (rotated, _) = vault.rotate_recovery_key(&sealed).unwrap();
+        assert_eq!(rotated.epoch(), Some(epoch.as_str()));
+
+        // Ungültige Kennungen werden abgelehnt.
+        let mut value: serde_json::Value = serde_json::from_str(&sealed.to_json()).unwrap();
+        value["epoch"] = serde_json::json!("nicht erlaubt/");
+        assert!(matches!(Keyring::from_json(&value.to_string()), Err(Error::InvalidKeyring)));
+        value["epoch"] = serde_json::json!("");
+        assert!(matches!(Keyring::from_json(&value.to_string()), Err(Error::InvalidKeyring)));
     }
 
     #[test]

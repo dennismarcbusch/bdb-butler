@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
-import type { Config, KindDef } from '../types';
+import type { Config, KindDef, SyncReport } from '../types';
 import type { SyncState } from '../useSync';
 import { McpSettings } from './McpSettings';
 import { ImportSettings } from './ImportSettings';
@@ -12,12 +12,14 @@ interface Props {
   configured: boolean;
   sync: SyncState;
   onSync: () => void;
+  /** „Server neu befüllen“ (nach Bestätigung). Liefert den Bericht des anschließenden Abgleichs oder `null`. */
+  onRefill: () => Promise<SyncReport | null>;
   onStatusChanged: () => void;
 }
 
 const MIN_PASSWORD = 10;
 
-export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: Props) {
+export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusChanged }: Props) {
   const [config, setConfig] = useState<Config | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +28,8 @@ export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: P
   const [confirm, setConfirm] = useState('');
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [confirmRefill, setConfirmRefill] = useState(false);
+  const [refillMessage, setRefillMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api.configGet().then(setConfig, (e) => setError(messageOf(e)));
@@ -46,6 +50,17 @@ export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: P
       onStatusChanged();
     } catch (e) {
       setError(messageOf(e));
+    }
+  }
+
+  async function refill() {
+    setRefillMessage(null);
+    const report = await onRefill();
+    setConfirmRefill(false);
+    if (report) {
+      setRefillMessage(
+        'Der Server ist wieder in Betrieb. Auf den anderen Rechnern beim nächsten Abgleich ebenfalls „Server neu befüllen“ wählen.',
+      );
     }
   }
 
@@ -112,9 +127,38 @@ export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: P
         {sync.warnings.map((w) => (
           <p key={w} class="error" role="alert">{w}</p>
         ))}
+        {refillMessage && <p class="ok" role="status">{refillMessage}</p>}
         <button type="button" disabled={!configured || sync.busy} onClick={onSync}>
           {sync.busy ? 'Gleiche ab …' : 'Jetzt abgleichen'}
         </button>
+        {configured && sync.errorCode === 'server_reset' && (
+          <div class="block" role="region" aria-label="Server neu befüllen">
+            <h4>Server neu befüllen</h4>
+            <p class="muted">
+              Dieser Rechner hat den vollständigen Stand. Er vergisst, was er über die Folgenummern des Servers weiß, und
+              sendet alle Einträge erneut. Liegt auf dem Server schon ein Stand (eine ältere Sicherung oder der eines
+              anderen Rechners, der schon neu befüllt hat), werden beide je Feld zusammengeführt: Der jüngere Stand
+              gewinnt, bei einer älteren Sicherung also der Stand der Rechner. Lokal geht nichts verloren. Danach müssen alle
+              anderen Rechner ebenfalls „Server neu befüllen“ wählen.
+            </p>
+            {!confirmRefill ? (
+              <div class="row">
+                <button type="button" disabled={sync.busy} onClick={() => setConfirmRefill(true)}>
+                  Server neu befüllen …
+                </button>
+              </div>
+            ) : (
+              <div class="row">
+                <button type="button" class="danger" disabled={sync.busy} onClick={() => void refill()}>
+                  Ja, Server neu befüllen
+                </button>
+                <button type="button" disabled={sync.busy} onClick={() => setConfirmRefill(false)}>
+                  Abbrechen
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <StammdatenSettings kinds={kinds} />

@@ -18,7 +18,7 @@ use crate::record::{self, Clock, Record};
 use crate::schema::{self, FieldType, KindDef};
 use crate::secrets::{self, MCP_TOKEN, SMTP_PASSWORD, SYNC_TOKEN};
 use crate::store::{Store, StoreError, CONFLICT_KIND};
-use crate::sync::{self, SyncClient, SyncError, SyncReport};
+use crate::sync::{self, ResetReason, SyncClient, SyncError, SyncReport};
 
 /// Mindestlänge des Master-Passworts in Zeichen.
 pub const MIN_PASSWORD_CHARS: usize = 10;
@@ -162,6 +162,14 @@ enum KeyringStep {
     Done(Vec<String>),
     /// Diesen Keyring hochladen. `initial`: Es ist der erste Keyring auf dem Server (ein Fehler bricht ab).
     Upload { keyring: crypto::Keyring, base_version: i64, initial: bool },
+}
+
+/// Mit welchem Keyring es nach dem Zurücksetzen weitergeht (siehe [`Service::refill_plan`]).
+enum RefillStep {
+    /// Ein anderer Rechner hat den Server schon neu befüllt: dessen Keyring übernehmen.
+    Adopt { keyring: crypto::Keyring, version: i64 },
+    /// Dieser Rechner befüllt den Server: Keyring mit neuer Bestandskennung hochladen.
+    Upload { keyring: crypto::Keyring, base_version: i64 },
 }
 
 /// Zugriff auf die Datenbank eines geteilten Dienstes in kurzen Abschnitten (siehe [`Service::sync_shared`]).
@@ -544,18 +552,22 @@ impl Service {
     ///   übernimmt dieser Rechner ihn, wenn seine Prüfsumme zum Datenschlüssel passt. Danach gilt auch hier nur
     ///   noch das neue Passwort. Sonst gibt es einen Hinweis.
     /// - Ein Keyring ohne Prüfsumme (angelegt vor ihrer Einführung) bekommt sie und wird neu hochgeladen.
+    /// - Hat der Server seinen Bestand verloren oder hat ein anderer Rechner ihn neu befüllt, bricht der Abgleich mit
+    ///   [`SyncError::ServerReset`] ab (siehe [`reset_reason`] und [`Service::refill_server`]).
     ///
     /// Hochladen erledigt der Aufrufer (ohne Sperre) und meldet das Ergebnis an [`Service::keyring_uploaded`].
     fn keyring_plan(&mut self, server: Option<(crypto::Keyring, i64)>) -> Result<KeyringStep> {
         let vault = &self.session.as_ref().ok_or(ServiceError::Locked)?.vault;
         let (local, version) = self.store.keyring()?.ok_or(ServiceError::NoVault)?;
         let mut warnings = Vec::new();
+        if let Some(reason) = reset_reason(vault, &local, version, server.as_ref()) {
+            return Err(SyncError::ServerReset(reason).into());
+        }
         match server {
             None if version == 0 => {
                 return Ok(KeyringStep::Upload { keyring: vault.seal_keyring(&local), base_version: 0, initial: true });
             }
-            // Der Server hat seinen Bestand verloren (zum Beispiel neu aufgesetzt). Einen automatischen Weg, ihn neu
-            // zu befüllen, gibt es noch nicht (siehe docs/INSTALLATION.md, Sicherung). Hier wird nichts hochgeladen.
+            // Ausgeschlossen durch `reset_reason` (der Server hat seinen Bestand verloren).
             None => {}
             Some((server, server_version)) if version == 0 => {
                 if server == local || vault.verify_keyring(&server) {
@@ -592,6 +604,66 @@ impl Service {
             Err(SyncError::KeyringChanged) if !initial => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    // ----- Server neu befüllen ----------------------------------------------------------------------------
+
+    /// Nimmt den Server nach einem Verlust wieder in Betrieb (leer oder aus einer älteren Sicherung) oder schließt
+    /// diesen Rechner an einen Server an, den ein anderer Rechner neu befüllt hat. Danach läuft ein normaler Abgleich.
+    ///
+    /// Lokal gehen dabei keine Daten verloren: Alle Einträge werden zum Senden vorgemerkt und, wo der Server schon
+    /// einen Stand hat, je Feld mit ihm zusammengeführt. Der jüngere Zeitstempel gewinnt, bei einer älteren Sicherung
+    /// also der Stand der Rechner. Siehe `docs/ARCHITEKTUR.md`, „Server neu befüllen“.
+    pub fn refill_server(&mut self) -> Result<SyncReport> {
+        let client = self.sync_client()?;
+        let (keyring, version) = match self.refill_plan(client.get_keyring()?)? {
+            RefillStep::Adopt { keyring, version } => (keyring, version),
+            RefillStep::Upload { keyring, base_version } => {
+                let version = client.put_keyring(base_version, &keyring).map_err(refill_upload_error)?;
+                (keyring, version)
+            }
+        };
+        self.store.reset_server_state(&keyring, version)?;
+        self.sync()
+    }
+
+    /// Wie [`Service::refill_server`] für einen geteilten Dienst (ohne Sperre während der Anfragen an den Server).
+    pub fn refill_server_shared(service: &Mutex<Service>) -> Result<SyncReport> {
+        let lock = || service.lock().map_err(|_| ServiceError::Settings("Interner Fehler: Sperre vergiftet".into()));
+        let client = lock()?.sync_client()?;
+        let server_keyring = client.get_keyring()?;
+        let step = lock()?.refill_plan(server_keyring)?;
+        let (keyring, version) = match step {
+            RefillStep::Adopt { keyring, version } => (keyring, version),
+            RefillStep::Upload { keyring, base_version } => {
+                let version = client.put_keyring(base_version, &keyring).map_err(refill_upload_error)?;
+                (keyring, version)
+            }
+        };
+        lock()?.store.reset_server_state(&keyring, version)?;
+        Self::sync_shared(service)
+    }
+
+    /// Entscheidet, mit welchem Keyring es nach dem Zurücksetzen weitergeht:
+    ///
+    /// - Trägt der Keyring des Servers eine andere Bestandskennung und passt seine Prüfsumme, hat ein anderer
+    ///   Rechner den Server neu befüllt. Dieser Rechner übernimmt den Keyring (samt Version) und lädt nichts hoch.
+    /// - Sonst befüllt dieser Rechner den Server: Sein Keyring bekommt eine neue Bestandskennung und ersetzt den des
+    ///   Servers (oder wird der erste, wenn der Server leer ist). Die neue Kennung zeigt allen anderen Rechnern, dass
+    ///   sie ebenfalls zurücksetzen müssen. Ein Keyring auf dem Server wird nur ersetzt, wenn er zu diesem Tresor
+    ///   gehört (Prüfsumme passt oder er gleicht dem lokalen).
+    fn refill_plan(&self, server: Option<(crypto::Keyring, i64)>) -> Result<RefillStep> {
+        let vault = &self.session.as_ref().ok_or(ServiceError::Locked)?.vault;
+        let (local, _) = self.store.keyring()?.ok_or(ServiceError::NoVault)?;
+        let base_version = match server {
+            None => 0,
+            Some((server, version)) if server.epoch() != local.epoch() && vault.verify_keyring(&server) => {
+                return Ok(RefillStep::Adopt { keyring: server, version });
+            }
+            Some((server, version)) if server == local || vault.verify_keyring(&server) => version,
+            Some(_) => return Err(ServiceError::OtherVaultOnServer),
+        };
+        Ok(RefillStep::Upload { keyring: vault.seal_keyring(&local.with_new_epoch()?), base_version })
     }
 
     // ----- Einträge --------------------------------------------------------------------------------------
@@ -815,6 +887,41 @@ impl Service {
 }
 
 /// Sortiert nach dem Sortierfeld des Typs (bei Daten auch zeitlich richtig), bei Gleichstand nach Titel.
+/// Passt der Server noch zum Stand dieses Rechners? Geprüft wird hier nur der Keyring. `latest` und die
+/// Folgenummern der Einträge prüft der Sync-Client (siehe `sync::check_server`).
+///
+/// Ein Rechner mit Version 0 kennt den Server noch nicht (Tresor offline angelegt) oder hat gerade zurückgesetzt.
+/// Für ihn gibt es nichts zu prüfen.
+fn reset_reason(
+    vault: &Vault,
+    local: &crypto::Keyring,
+    version: i64,
+    server: Option<&(crypto::Keyring, i64)>,
+) -> Option<ResetReason> {
+    if version == 0 {
+        return None;
+    }
+    match server {
+        None => Some(ResetReason::Empty),
+        // Nur mit passender Prüfsumme: Einen fremden Keyring meldet `keyring_plan` als Hinweis.
+        Some((keyring, _)) if keyring.epoch() != local.epoch() && vault.verify_keyring(keyring) => {
+            Some(ResetReason::Refilled)
+        }
+        Some((_, server_version)) if *server_version < version => Some(ResetReason::Behind),
+        Some(_) => None,
+    }
+}
+
+fn refill_upload_error(e: SyncError) -> ServiceError {
+    match e {
+        SyncError::KeyringChanged => ServiceError::Invalid(
+            "Ein anderer Rechner hat den Server gerade neu befüllt. Bitte „Server neu befüllen“ noch einmal wählen."
+                .into(),
+        ),
+        other => other.into(),
+    }
+}
+
 fn sort_views(def: &KindDef, views: &mut [RecordView]) {
     let text = |v: &RecordView, field: &str| v.fields.get(field).and_then(Value::as_str).unwrap_or("").to_lowercase();
     views.sort_by(|a, b| {

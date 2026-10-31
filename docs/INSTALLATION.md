@@ -370,7 +370,7 @@ Andere MCP-Clients, die Streamable HTTP mit eigenem Kopf `Authorization` beherrs
 | Was | Wie sichern | Wiederherstellen |
 |---|---|---|
 | **Recovery-Key** | offline, ausgedruckt oder abgeschrieben | Entsperren mit dem Recovery-Key auf dem Sperrbildschirm |
-| **Server-Datenbank** | regelmäßig `/var/lib/bdbb/bdbb.db` sichern (Chiffretext, darf auch auf weniger vertrauenswürdige Ziele) | siehe Hinweis unten |
+| **Server-Datenbank** | regelmäßig `/var/lib/bdbb/bdbb.db` sichern (Chiffretext, darf auch auf weniger vertrauenswürdige Ziele) | zurückspielen und neu befüllen (Abschnitt 11.1) |
 | **Ordner für PDFs und Anhänge** | über Nextcloud (Versionen, Papierkorb) und die übliche Nextcloud-Sicherung | aus Nextcloud |
 | Lokaler Datenordner eines Rechners | nicht nötig, solange der Server läuft | App neu installieren und mit dem Tresor verbinden (Abschnitt 6) |
 
@@ -382,10 +382,37 @@ sqlite3 /var/lib/bdbb/bdbb.db ".backup '/var/backups/bdbb-$(date +%F).db'"
 
 Alternativ den Dienst kurz anhalten (`systemctl stop bdbb`), die Datei kopieren und wieder starten.
 
-**Wichtig, Stand heute:** Jeder Rechner hat den vollständigen Stand, und solange einer davon intakt ist, gehen keine Daten verloren. Einen fertigen Weg, den Server nach einem Verlust wieder in Betrieb zu nehmen, gibt es aber noch nicht. Die Rechner merken sich, bis zu welcher Folgenummer sie den Server kennen. Ein leerer Server oder eine ältere Sicherung passen nicht dazu, und der Abgleich läuft dann nicht mehr sauber: Er bricht ab oder übersieht neue Einträge anderer Rechner. Bis die App das selbst kann:
+### 11.1 Server nach einem Verlust wieder in Betrieb nehmen
 
-- Den Server-Container mit Proxmox-Sicherungen absichern und die Datenbank wie oben sichern, als Notfallkopie des Chiffretexts.
-- Fällt der Server aus, die Rechner offline weiterbenutzen (das geht ohne Einschränkung) und den Server nicht mit einer älteren Sicherung zurückspielen, ohne die Rechner neu zu verbinden.
+Jeder Rechner hat den vollständigen Stand. Solange einer davon intakt ist, gehen keine Daten verloren, auch wenn der Server leer ist oder nur eine ältere Sicherung hat. Die Rechner merken sich aber, bis zu welcher Folgenummer sie den Server kennen. Passt der Server nicht mehr dazu, bricht der Abgleich ab, bevor er etwas einspielt oder sendet, und meldet zum Beispiel „Der Server ist leer …“ oder „Der Server hat einen älteren Stand als dieser Rechner …“.
+
+So nimmst du den Server wieder in Betrieb:
+
+1. Server neu aufsetzen (Abschnitt 2) oder die Sicherung zurückspielen: Dienst anhalten, Datei ersetzen, Dienst starten.
+
+   ```bash
+   systemctl stop bdbb
+   ```
+
+   ```bash
+   install -o bdbb -g bdbb -m 0600 /var/backups/bdbb-2026-10-01.db /var/lib/bdbb/bdbb.db
+   ```
+
+   ```bash
+   rm -f /var/lib/bdbb/bdbb.db-wal /var/lib/bdbb/bdbb.db-shm
+   ```
+
+   ```bash
+   systemctl start bdbb
+   ```
+
+   Das Token bleibt dasselbe (`BDBB_TOKEN`), sonst in jeder App neu eintragen.
+2. Auf **einem** Rechner, am besten dem, auf dem du zuletzt gearbeitet hast: Einstellungen, Abgleich, „Jetzt abgleichen“. Die App erkennt den Verlust und zeigt „Server neu befüllen“. Nach der Bestätigung sendet sie ihren ganzen Stand. Liegt eine ältere Sicherung auf dem Server, wird sie je Feld zusammengeführt: Die jüngere Änderung gewinnt, also der Stand der Rechner. Der Keyring dieses Rechners ersetzt den der Sicherung, damit gilt sein Master-Passwort.
+3. Auf **jedem weiteren** Rechner: abgleichen. Die App meldet „Ein anderer Rechner hat den Server neu befüllt“ und bietet ebenfalls „Server neu befüllen“ an. Nach der Bestätigung übernimmt sie den Keyring des Servers und sendet ihre Einträge. Was dort offline geändert wurde, kommt dazu. Gleiche Werte ergeben keine Konflikte.
+
+Bis alle Rechner das getan haben, können sie offline ohne Einschränkung weiterarbeiten. Ein Rechner mit älterer App-Fassung erkennt den neu befüllten Server nicht sicher. Aktualisiere deshalb alle Rechner, bevor du den Server neu befüllst (Abschnitt 12).
+
+Die Sicherung der Server-Datenbank ist die Notfallkopie für den Fall, dass kein Rechner mehr intakt ist: Mit ihr und dem Recovery-Key lässt sich ein neuer Rechner einrichten (Abschnitt 6). Solange ein Rechner intakt ist, reicht dagegen auch ein leerer Server. Proxmox-Sicherungen des Containers schaden nicht.
 
 ## 12. Updates
 
@@ -409,6 +436,10 @@ systemctl restart bdbb
 | „Server nicht erreichbar“ | Adresse prüfen (mit `https://`), `curl https://butler.example.de/healthz`, Caddy und `systemctl status bdbb` prüfen |
 | „Auf dem Server liegt ein anderer Tresor als lokal“ | Der Rechner hat offline einen eigenen Tresor angelegt, auf dem Server liegt schon einer. Den lokalen Datenordner entfernen (Abschnitt 4) und mit „Mit vorhandenem Tresor verbinden“ neu einrichten. Achtung: Was nur lokal existierte, geht dabei verloren |
 | Hinweis „neuerer Keyring, dessen Prüfsumme nicht passt“ | Der Keyring auf dem Server stammt nicht von diesem Tresor oder von einer älteren App-Fassung. Alle Rechner aktualisieren und das Passwort auf einem davon neu setzen. Tritt das ohne Passwortwechsel auf, den Server prüfen |
+| „Der Server ist leer, er hat seinen Bestand verloren“ | Der Server wurde neu aufgesetzt oder seine Datenbank ist weg. In den Einstellungen unter Abgleich „Server neu befüllen“ wählen (Abschnitt 11.1) |
+| „Der Server hat einen älteren Stand als dieser Rechner“ | Eine ältere Sicherung wurde zurückgespielt. „Server neu befüllen“ wählen, die neueren Stände der Rechner gewinnen (Abschnitt 11.1). Tritt das ohne Zurückspielen auf, den Server prüfen (richtige Datenbank in `BDBB_DB`?) |
+| „Ein anderer Rechner hat den Server neu befüllt“ | Auch auf diesem Rechner „Server neu befüllen“ wählen. Danach gilt das Master-Passwort des Rechners, der zuerst neu befüllt hat |
+| „Ein anderer Rechner hat den Server gerade neu befüllt. Bitte … noch einmal wählen“ | Zwei Rechner haben gleichzeitig neu befüllt. Einfach noch einmal „Server neu befüllen“ wählen |
 | Hinweis „Einträge ließen sich nicht einspielen“ | Ein Eintrag ist beschädigt oder stammt von einer neueren App-Fassung. Diese App aktualisieren. Der Abgleich läuft für alle anderen Einträge weiter |
 | „Bitte zuerst den Ordner für PDFs und Anhänge … eintragen“ | Abschnitt 7 |
 | „Bitte zuerst die Stammdaten vervollständigen“ | Abschnitt 8, die genannten Felder ausfüllen |

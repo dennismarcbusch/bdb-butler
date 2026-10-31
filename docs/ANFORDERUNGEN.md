@@ -81,7 +81,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 ## Stand der Umsetzung
 
-- **V1:** Fundament (Krypto, lokale Datenbank, Sync, Tauri-App, lokaler MCP-Server), Schulen und Ansprechpartner mit Graph, Beratungen, Protokolle, Auftragsbuch und Dienstreisemodul sind umgesetzt und getestet. Der Import der Daten des alten Django-Tools ist vorhanden (an Testdaten des alten Tools geprüft, noch nicht an der echten Datenbank).
+- **V1:** Fundament (Krypto, lokale Datenbank, Sync, Tauri-App, lokaler MCP-Server), Schulen und Ansprechpartner mit Graph, Beratungen, Protokolle, Auftragsbuch und Dienstreisemodul sind umgesetzt und getestet. Der Import der Daten des alten Django-Tools ist vorhanden (an Testdaten des alten Tools geprüft, noch nicht an der echten Datenbank). Nach einem Verlust des Servers (leer oder ältere Sicherung) erkennt die App das und befüllt ihn nach Bestätigung aus dem Stand der Rechner neu (siehe `ARCHITEKTUR.md`, „Server neu befüllen“, und `INSTALLATION.md`, Abschnitt 11).
 - **V2:** Fortbildungsmodul mit Prozess und Checklisten, Tätigkeitsbericht, Fahrkartenpreis als Vorschlag und R002 (Grunddaten) sind umgesetzt. Teilnahmebescheinigungen erzeugt und versendet die App nicht, sie stehen als Aufgabe in der Checkliste der Nachbereitung.
 - **V3:** Android ist nicht begonnen.
 
@@ -90,5 +90,4 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen: Die App kompiliert, die Oberfläche ist aber nur im Browser (Chromium) gegen den Kern geprüft, nicht in der Tauri-Hülle selbst.
 - Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen (der Ordner `dienstreisebuster/` ist bereits entfernt, `db.sqlite3` und `media` des laufenden Tools bleiben dafür erhalten).
 - Tests der TLS-Verbindung zum Mailserver, der Preiserkennung an echten Fahrkarten und des R002 mit der Behörde.
-- Server nach einem Verlust wieder in Betrieb nehmen: Die Rechner merken sich Folgenummern des Servers. Ein leerer Server oder eine ältere Sicherung passen nicht dazu. Nötig ist ein Weg „Server neu befüllen“, der Cursor und Folgenummern zurücksetzt und den Bestand eines Rechners erneut hochlädt (siehe `INSTALLATION.md`, Abschnitt 11).
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

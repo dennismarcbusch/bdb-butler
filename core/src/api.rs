@@ -85,6 +85,7 @@ impl From<ServiceError> for ApiError {
             ServiceError::Sync(SyncError::Unauthorized) => "unauthorized",
             ServiceError::Sync(SyncError::Network(_)) => "network",
             ServiceError::Sync(SyncError::Crypto(crypto::Error::WrongSecret)) => "wrong_secret",
+            ServiceError::Sync(SyncError::ServerReset(_)) => "server_reset",
             ServiceError::Sync(_) => "sync",
             ServiceError::Store(_) => "store",
             ServiceError::Crypto(_) => "crypto",
@@ -370,13 +371,19 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
     if let Some(result) = call_mcp(app, command, args) {
         return result;
     }
-    if command == "sync" {
+    if command == "sync" || command == "server_refill" {
         // Ohne die Sperre über die ganze Dauer: Andere Befehle und der KI-Zugriff laufen während der Anfragen an den
         // Server weiter (siehe `Service::sync_shared`).
         if !(args.is_null() || args.as_object().is_some_and(Map::is_empty)) {
             return Err(ApiError::new("bad_request", "Dieser Befehl hat keine Argumente"));
         }
-        return to_value(Service::sync_shared(&app.service)?);
+        // „Server neu befüllen“ fragt die Oberfläche vorher ab (siehe `Service::refill_server`).
+        let report = if command == "sync" {
+            Service::sync_shared(&app.service)?
+        } else {
+            Service::refill_server_shared(&app.service)?
+        };
+        return to_value(report);
     }
     let mut service = app
         .service
@@ -613,6 +620,7 @@ mod tests {
         let s = service();
         assert_eq!(err(&s, "unlock", json!({"password": PASSWORD})).code, "no_vault");
         assert_eq!(err(&s, "sync", Value::Null).code, "not_configured");
+        assert_eq!(err(&s, "server_refill", Value::Null).code, "not_configured");
         assert_eq!(err(&s, "create_vault", json!({"password": "kurz"})).code, "weak_password");
         ok(&s, "create_vault", json!({"password": PASSWORD}));
         assert_eq!(err(&s, "create_vault", json!({"password": PASSWORD})).code, "vault_exists");

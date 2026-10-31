@@ -66,6 +66,7 @@ Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**
 - Abgeglichen wird beim Entsperren, kurz nach jeder Änderung und auf Knopfdruck („Jetzt abgleichen“ in den Einstellungen). Einen regelmäßigen Abgleich im Hintergrund gibt es nicht. Änderungen eines anderen Rechners kommen also spätestens beim nächsten dieser Anlässe an.
 - Ändern zwei Rechner verschiedene Felder desselben Eintrags, werden beide Änderungen übernommen.
 - Ändern sie dasselbe Feld, gewinnt die jüngere Änderung. Die andere Fassung bleibt als **Konflikt** erhalten und lässt sich mit einem Klick übernehmen. So geht kein Text stillschweigend verloren.
+- Verliert der Sync-Server seinen Bestand (neu aufgesetzt oder aus einer älteren Sicherung zurückgespielt), merkt die App das und bietet „Server neu befüllen“ an. Jeder Rechner hat den vollständigen Stand, neuere Stände der Rechner gewinnen (siehe [Sicherung](docs/INSTALLATION.md#11-sicherung-und-wiederherstellung)).
 
 ### KI-Zugriff (MCP)
 
@@ -168,7 +169,6 @@ Die PDF-Tests prüfen gegen Referenzwerte aus der alten Python-Fassung (alle Fel
 - Läuft: alle oben genannten Module. Kern, Server und Oberfläche sind getestet, die Oberfläche im Browser gegen den echten Kern.
 - Die Tauri-Hülle kompiliert, ist aber unter Windows (WebView2) und Linux (WebKitGTK) noch nicht im Alltag geprüft.
 - Nicht gegen die Wirklichkeit geprüft: die TLS-Verbindung zu einem echten Mailserver, die Preiserkennung an echten Fahrkarten, der R002 durch die Behörde und der Import der echten Datenbank des alten Tools.
-- Nach einem Verlust des Sync-Servers gibt es noch keinen fertigen Weg, ihn aus den Rechnern neu zu befüllen oder eine ältere Sicherung einzuspielen (siehe [Sicherung](docs/INSTALLATION.md#11-sicherung-und-wiederherstellung)). Die Daten selbst liegen vollständig auf jedem Rechner.
 - Android (Tauri 2 oder PWA) ist nicht begonnen.
 
 ## Weitere Dokumentation

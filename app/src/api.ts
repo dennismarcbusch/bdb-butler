@@ -94,6 +94,8 @@ export const api = {
   changePassword: (oldPassword: string, newPassword: string) =>
     call<null>('change_password', { old_password: oldPassword, new_password: newPassword }),
   sync: () => call<SyncReport>('sync'),
+  /** Setzt diesen Rechner zurück und befüllt den Server neu, danach normaler Abgleich. Nur nach Bestätigung. */
+  serverRefill: () => call<SyncReport>('server_refill'),
   kinds: () => call<KindDef[]>('kinds'),
   list: (kind: string) => call<RecordView[]>('list', { kind }),
   listAll: () => call<RecordView[]>('list_all'),

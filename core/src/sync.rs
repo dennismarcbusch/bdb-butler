@@ -3,6 +3,10 @@
 //! [`sync`] holt zuerst alle neuen Einträge vom Server und spielt sie lokal ein (mit Zusammenführung),
 //! dann sendet es die lokalen Änderungen. Antwortet der Server mit einem Konflikt (409), wird der aktuelle
 //! Serverstand eingespielt, zusammengeführt und erneut gesendet.
+//!
+//! Vor dem Holen prüft [`sync`], ob der Server noch zu den Folgenummern dieses Rechners passt. Hat er Stände
+//! verloren (leer, ältere Sicherung), bricht der Abgleich mit [`SyncError::ServerReset`] ab, bevor etwas
+//! eingespielt oder gesendet wird. Dann hilft nur „Server neu befüllen“ (siehe `Service::refill_server`).
 
 use std::time::Duration;
 
@@ -38,6 +42,8 @@ pub enum SyncError {
     TooManyConflicts(String),
     #[error("Die App wurde während des Abgleichs gesperrt")]
     Locked,
+    #[error("{0}")]
+    ServerReset(ResetReason),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -45,6 +51,37 @@ pub enum SyncError {
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;
+
+/// Warum der Server nicht mehr zu den Folgenummern dieses Rechners passt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetReason {
+    /// Auf dem Server liegt kein Keyring mehr (neu aufgesetzt, Datenbank verloren).
+    Empty,
+    /// Der Server hat einen älteren Stand als dieser Rechner (zum Beispiel aus einer Sicherung zurückgespielt).
+    Behind,
+    /// Ein anderer Rechner hat den Server neu befüllt (neue Bestandskennung im Keyring).
+    Refilled,
+}
+
+impl std::fmt::Display for ResetReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ResetReason::Empty => {
+                "Der Server ist leer, er hat seinen Bestand verloren. Dieser Rechner kann ihn mit „Server neu \
+                 befüllen“ (Einstellungen, Abgleich) wieder in Betrieb nehmen."
+            }
+            ResetReason::Behind => {
+                "Der Server hat einen älteren Stand als dieser Rechner (zum Beispiel aus einer Sicherung \
+                 zurückgespielt). Bitte in den Einstellungen unter Abgleich „Server neu befüllen“ wählen."
+            }
+            ResetReason::Refilled => {
+                "Ein anderer Rechner hat den Server neu befüllt. Bitte auch hier in den Einstellungen unter \
+                 Abgleich „Server neu befüllen“ wählen."
+            }
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushResult {
@@ -312,6 +349,7 @@ pub fn sync(store: &mut Store, vault: &Vault, clock: &mut Clock, client: &SyncCl
 pub fn sync_with(local: &mut impl Local, client: &SyncClient) -> Result<SyncReport> {
     let mut report = SyncReport::default();
 
+    check_server(local, client)?;
     pull_all(local, client, &mut report)?;
 
     for _ in 0..MAX_ROUNDS {
@@ -326,6 +364,32 @@ pub fn sync_with(local: &mut impl Local, client: &SyncClient) -> Result<SyncRepo
     // Neue Konflikteinträge entstehen nur beim Zusammenführen. Bleibt nach mehreren Runden etwas übrig,
     // wird es beim nächsten Abgleich gesendet.
     Ok(report)
+}
+
+/// Passt der Server noch zu dem, was dieser Rechner von ihm weiß? Zwei Prüfungen mit einer Anfrage:
+///
+/// - `latest` des Servers darf nicht unter der höchsten bekannten Folgenummer liegen ([`Store::known_seq`]).
+///   Sonst fehlen dem Server Stände, und neue Schreibvorgänge bekämen Folgenummern, die dieser Rechner für bekannt
+///   hält und nie holen würde.
+/// - Unter der Folgenummer des Zeugen ([`Store::witness`]) liegt auf einem unveränderten Server genau dessen Blob
+///   oder nichts (der Eintrag wurde seitdem neu geschrieben). Ein anderer Eintrag oder Blob dort heißt: Der Server
+///   wurde zurückgespielt, und danach wurde schon wieder geschrieben.
+fn check_server(local: &mut impl Local, client: &SyncClient) -> Result<()> {
+    let (known, witness) = local.with(|store, _, _| Ok((store.known_seq()?, store.witness()?)))?;
+    if known == 0 {
+        return Ok(());
+    }
+    let since = witness.as_ref().map_or(known, |w| w.seq - 1);
+    let page = client.pull(since, 1)?;
+    if page.latest < known {
+        return Err(SyncError::ServerReset(ResetReason::Behind));
+    }
+    if let (Some(witness), Some(found)) = (&witness, page.entries.first()) {
+        if found.seq == witness.seq && (found.id != witness.id || found.blob != witness.blob) {
+            return Err(SyncError::ServerReset(ResetReason::Behind));
+        }
+    }
+    Ok(())
 }
 
 /// Holt alle neuen Einträge. Ein Eintrag, der sich nicht lesen oder einspielen lässt (beschädigt, aus einer neueren
