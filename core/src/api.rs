@@ -32,6 +32,7 @@
 //! | `anhang_delete` | `{id}` | |
 //! | `file_path` | `{path}` | `{path}` (absolut) |
 //! | `file_read` | `{path}` | `{name, data}` (Base64) |
+//! | `report_save` | `{name, content}` | `{path}` |
 //! | `mail_draft` | `{id, kind}` (`antrag` oder `abrechnung`) | Entwurf |
 //! | `mail_send` | `{id, kind, subject, body, attachments}` | |
 //! | `mcp_get` | | Einstellungen des KI-Zugriffs und ob der Server läuft |
@@ -167,6 +168,13 @@ struct AttachmentArgs {
     data: String,
     #[serde(default)]
     beilegen: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReportArgs {
+    name: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
@@ -478,6 +486,10 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
             let a: PathArgs = parse(args)?;
             let (name, bytes) = service.file_read(&a.path)?;
             Ok(json!({"name": name, "data": B64.encode(bytes)}))
+        }
+        "report_save" => {
+            let a: ReportArgs = parse(args)?;
+            Ok(json!({"path": service.bericht_speichern(&a.name, &a.content)?}))
         }
         "mail_draft" => {
             let a: MailKindArgs = parse(args)?;

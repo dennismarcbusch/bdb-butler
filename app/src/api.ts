@@ -114,6 +114,7 @@ export const api = {
   mailDraft: (id: string, kind: 'antrag' | 'abrechnung') => call<MailDraft>('mail_draft', { id, kind }),
   mailSend: (id: string, kind: 'antrag' | 'abrechnung', subject: string, body: string, attachments: string[]) =>
     call<null>('mail_send', { id, kind, subject, body, attachments }),
+  reportSave: (name: string, content: string) => call<{ path: string }>('report_save', { name, content }),
   mcpGet: () => call<McpState>('mcp_get'),
   mcpSet: (enabled: boolean, port: number, write: boolean, allowPersonal: string[]) =>
     call<McpState>('mcp_set', { enabled, port, write, allow_personal: allowPersonal }),

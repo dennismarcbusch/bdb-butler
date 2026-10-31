@@ -1078,6 +1078,53 @@ async function main() {
       await shot(page, '23-fortbildung-nachbereitung');
     });
 
+    await step('Tätigkeitsbericht: Zeiträume, Zahlen aus allen Modulen, Speichern', async () => {
+      const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: false }).first().click();
+      await nav('Tätigkeitsbericht');
+      const report = page.getByTestId('report');
+      await report.getByRole('heading', { name: 'Beratungen' }).waitFor();
+
+      // Kalenderjahr 2026: zwei Beratungen (90 Minuten), eine Dienstreise, ein Protokoll.
+      await page.getByLabel('Von').fill('2026-01-01');
+      await page.getByLabel('Bis').fill('2026-12-31');
+      const text = async () => report.innerText();
+      await until(async () => (await text()).includes('Zeitraum: 01.01.2026 bis 31.12.2026') && (await text()).includes('Anzahl: 2'), 'Bericht mit Beratungen angezeigt');
+      let body = await text();
+      assert.match(body, /Anzahl: 2/);
+      assert.match(body, /Beratungszeit: 1 Std\. 30 Min\./);
+      assert.match(body, /nach Art: .*Vor Ort 1 \(1 Std\. 30 Min\.\)/);
+      assert.match(body, /16\.11\.2026: Beratung Medienkonzept, Dillingen a\. d\. Donau \(Bezahlt\)/);
+      assert.match(body, /Keine Fortbildungen im Zeitraum/);
+      assert.match(body, /Eingegangen: 3 \(eingeplant 2, offen 1\)/);
+      await shot(page, '24-bericht');
+
+      // 2027: die Fortbildung (Nachbereitung) zählt als durchgeführt, mit geplanter Teilnehmerzahl.
+      await page.getByLabel('Von').fill('2027-01-01');
+      await page.getByLabel('Bis').fill('2027-12-31');
+      await until(async () => (await text()).includes('KI im Unterricht, Tagesveranstaltung'), 'Fortbildung im Bericht');
+      body = await text();
+      assert.match(body, /Durchgeführt: 1 \(Teilnehmende insgesamt: 25\)/);
+      assert.match(body, /10\.02\.2027: KI im Unterricht, Tagesveranstaltung, Ulm, 25 Teilnehmende/);
+      assert.match(body, /Keine Beratungen im Zeitraum/);
+
+      // Der Bericht enthält keine Personen.
+      for (const secret of ['Weber', 'Bauer', 'Müller', 'Mustermann']) assert.ok(!body.includes(secret), `${secret} im Bericht`);
+
+      // Ungültiger Zeitraum.
+      await page.getByLabel('Bis').fill('2026-01-01');
+      await page.getByRole('alert').filter({ hasText: 'gültigen Zeitraum' }).waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Als Datei speichern' }).isDisabled(), true);
+
+      // Voreinstellung: Schuljahr, dann speichern.
+      await page.getByRole('button', { name: /^Kalenderjahr 2026$/ }).click();
+      await page.getByRole('button', { name: 'Als Datei speichern' }).click();
+      const saved = page.getByRole('status').filter({ hasText: 'Gespeichert: Berichte/Tätigkeitsbericht 01.01.2026 bis 31.12.2026.md' });
+      await saved.waitFor();
+      const content = Buffer.from((await bridgeCall(bridgeA, 'file_read', { path: 'Berichte/Tätigkeitsbericht 01.01.2026 bis 31.12.2026.md' })).data, 'base64').toString();
+      assert.match(content, /^# Tätigkeitsbericht\n/);
+      assert.match(content, /- Beratungszeit: 1 Std\. 30 Min\./);
+    });
+
     await step('Einstellungen: Passwort ändern', async () => {
       await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
       await page.getByLabel('Aktuelles Passwort').fill('falsches passwort hier');

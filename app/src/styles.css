@@ -229,3 +229,12 @@ div.inline select { width: auto; }
 .phases li.current { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .checklists, .requests { list-style: none; padding: 0; margin: 0.3rem 0; display: grid; gap: 0.2rem; }
 .training h4 { margin: 0.9rem 0 0.2rem; font-size: 0.95rem; }
+
+.report-body { margin-top: 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 1.2rem; background: var(--bg); }
+.report-controls .field { margin: 0; }
+
+@media print {
+  header, .report-controls, .banner, .no-print { display: none !important; }
+  .content > section, .report-body { border: none; padding: 0; background: #fff; }
+  .markdown, .markdown * { color: #000; }
+}

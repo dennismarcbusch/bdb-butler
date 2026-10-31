@@ -6,6 +6,7 @@ import type { KindDef, RecordView } from '../types';
 import { useSync } from '../useSync';
 import { Conflicts } from './Conflicts';
 import { GraphView } from './GraphView';
+import { ReportView } from './ReportView';
 import { KindView } from './KindView';
 import { Settings } from './Settings';
 
@@ -103,6 +104,9 @@ export function Shell({ configured, onStatusChanged }: Props) {
           <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>
             Graph
           </button>
+          <button type="button" class={view === 'report' ? 'active' : ''} onClick={() => setView('report')}>
+            Tätigkeitsbericht
+          </button>
           <button type="button" class={view === 'conflicts' ? 'active' : ''} onClick={() => setView('conflicts')}>
             Konflikte{conflicts.length > 0 ? ` (${conflicts.length})` : ''}
           </button>
@@ -141,6 +145,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
             onNavigate={openRecord}
           />
         )}
+        {view === 'report' && <ReportView revision={sync.revision} />}
         {view === 'graph' && <GraphView kinds={kinds} revision={sync.revision} onOpen={openRecord} />}
         {view === 'conflicts' && (
           <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />

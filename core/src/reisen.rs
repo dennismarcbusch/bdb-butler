@@ -251,6 +251,30 @@ impl Service {
         }
     }
 
+    /// Speichert einen Bericht (Markdown) im Unterordner `Berichte` des Ordners für PDFs und Anhänge. Eine Datei
+    /// mit gleichem Namen wird ersetzt, damit ein erneut erzeugter Bericht den alten ablöst. Gibt den relativen
+    /// Pfad zurück.
+    pub fn bericht_speichern(&mut self, name: &str, content: &str) -> Result<String> {
+        if content.trim().is_empty() {
+            return Err(ServiceError::Invalid("Der Bericht ist leer.".into()));
+        }
+        if content.len() > 5 * 1024 * 1024 {
+            return Err(ServiceError::Invalid("Der Bericht ist zu groß.".into()));
+        }
+        let root = self.files_root()?;
+        let dir = root.join("Berichte");
+        fs::create_dir_all(&dir).map_err(io_err)?;
+        // Trennzeichen im Namen (zum Beispiel „Schuljahr 2025/26“) werden zu Bindestrichen, statt den Anfang
+        // des Namens zu verlieren.
+        let replaced = name.replace(['/', '\\'], "-");
+        let mut file = sanitize_file_name(replaced.trim_start_matches(['.', '-', ' ']));
+        if !file.to_lowercase().ends_with(".md") {
+            file.push_str(".md");
+        }
+        fs::write(dir.join(&file), content).map_err(io_err)?;
+        Ok(format!("Berichte/{file}"))
+    }
+
     pub fn file_read(&self, relative: &str) -> Result<(String, Vec<u8>)> {
         let path = self.resolve_path(relative)?;
         let bytes = fs::read(&path).map_err(|_| ServiceError::NotFound)?;
@@ -920,6 +944,25 @@ mod tests {
         assert!(!dump.contains("geheim"));
         e.service.set_smtp_password("").unwrap();
         assert!(!e.service.smtp_password_is_set());
+    }
+
+    #[test]
+    fn reports_are_saved_in_the_reports_folder_and_replaced() {
+        let mut e = env();
+        let path = e.service.bericht_speichern("Tätigkeitsbericht Schuljahr 2025/26", "# Bericht\n\n- Anzahl: 3\n").unwrap();
+        assert_eq!(path, "Berichte/Tätigkeitsbericht Schuljahr 2025-26.md", "Schrägstriche im Namen werden zu Bindestrichen");
+        assert_eq!(fs::read_to_string(e.files.join(&path)).unwrap(), "# Bericht\n\n- Anzahl: 3\n");
+        // Gleicher Name ersetzt die Datei, die Endung wird nicht verdoppelt.
+        let again = e.service.bericht_speichern("Tätigkeitsbericht Schuljahr 2025/26.md", "# Neu\n").unwrap();
+        assert_eq!(again, path);
+        assert_eq!(fs::read_to_string(e.files.join(&path)).unwrap(), "# Neu\n");
+        assert_eq!(fs::read_dir(e.files.join("Berichte")).unwrap().count(), 1);
+        // Pfadanteile und leere Berichte.
+        assert_eq!(e.service.bericht_speichern("../../böse", "x").unwrap(), "Berichte/böse.md");
+        assert!(matches!(e.service.bericht_speichern("leer", "  \n"), Err(ServiceError::Invalid(_))));
+        assert!(e.service.file_read(&path).is_ok(), "gespeicherte Berichte lassen sich über file_read öffnen");
+        e.service.set_config(Config::default()).unwrap();
+        assert!(e.service.bericht_speichern("x", "y").unwrap_err().to_string().contains("Ordner für PDFs und Anhänge"));
     }
 
     #[test]
