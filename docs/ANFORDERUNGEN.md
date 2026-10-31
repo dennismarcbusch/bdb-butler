@@ -19,10 +19,12 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
   - PDFs und Anhänge (liegen als Dateien in einem lokalen Ordner, der per Nextcloud oder ein anderes Tool synchronisiert wird; je Rechner wird nur der Ordnerpfad in der App angegeben).
 - Entsperren per Master-Passwort mit Recovery-Key. Passkey/YubiKey ist keine Anforderung.
 - Das Gerät, auf dem die App läuft, ist verschlüsselt (Festplattenverschlüsselung).
+- Der Ordner mit PDFs und Anhängen wird nicht zusätzlich verschlüsselt (entschieden).
 
 ## KI-Anbindung
 
 - Ein lokaler MCP-Server in der App ist von Anfang an vorgesehen. Per KI sollen Daten angelegt, abgefragt und bearbeitet werden können.
+- Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein. Der Nutzer achtet selbst darauf, dass über die KI keine personenbezogenen Daten verarbeitet werden.
 
 ## Funktionsbereiche
 
@@ -64,19 +66,21 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 - Bericht über die Tätigkeit, gespeist aus den Daten der anderen Module.
 
-## Umfang V1 (Vorschlag, noch nicht bestätigt)
+## Umfang
+
+**V1** (in drei Meilensteinen):
 
 1. Meilenstein 1: Fundament (Krypto-Kern, lokale Datenbank, Sync, App-Gerüst, lokaler MCP-Server) und Modul Schulen/Ansprechpartner mit Graph-Ansicht.
 2. Meilenstein 2: Beratungen, Protokolle, Auftragsbuch.
 3. Meilenstein 3: Dienstreisemodul (Neuumsetzung; danach wird das Django-Tool abgeschaltet).
-4. Nach V1: Fortbildungsmodul, Tätigkeitsbericht, Android-Zugang, Ticketpreis-Erkennung, R002-Abrechnung.
+
+**V2:** Fortbildungsmodul, Tätigkeitsbericht (braucht die Daten der anderen Module), Ticketpreis-Erkennung und R002-Abrechnung im Dienstreisemodul.
+
+**V3:** Android-Zugang. Was am Handy gebraucht wird, wird erst dann geklärt.
 
 ## Offene Punkte
 
-- V1-Umfang und Reihenfolge bestätigen.
-- Soll der Sync-Server in Go (entschieden) oder in Rust gebaut werden? Rust hätte gemeinsamen Protokoll- und Krypto-Code mit dem Client und nur zwei Sprachen im Projekt.
-- MCP-Server: welche Tools, welche Felder für die KI sichtbar sind, und ob die Datenschutzfreigabe die Übermittlung von Klartext an den KI-Anbieter einschließt.
-- Anhänge-Ordner: Liegt im Klartext im Nextcloud-Ordner. Zu klären, ob der Nextcloud-Server vertrauenswürdig ist oder der Ordner zusätzlich verschlüsselt wird.
-- Android: Tauri 2 oder PWA; Ordnerzugriff auf Android ist eingeschränkt.
+- MCP-Server: Welche Tools genau und welche Felder für die KI sichtbar sind (Vorschlag in `ARCHITEKTUR.md`).
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen.
-- Verarbeitungsverzeichnis an die neue Architektur anpassen.
+- Verarbeitungsverzeichnis an die neue Architektur anpassen (Sync-Server mit Chiffretext).
+- V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

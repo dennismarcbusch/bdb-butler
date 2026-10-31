@@ -68,14 +68,16 @@ Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`se
 - Läuft im Prozess der App und hat damit Zugriff auf den entsperrten Datenschlüssel. Er funktioniert nur, solange die App läuft und entsperrt ist.
 - Er lauscht ausschließlich auf localhost und verlangt ein Token. Claude Desktop oder Claude Code verbinden sich per HTTP, gegebenenfalls über einen kleinen stdio-Vermittler.
 - Geplante Eigenschaften: Zugriffsstufen (nur lesen, lesen und schreiben), ein Protokoll der Schreibzugriffe, einstellbare Sichtbarkeit einzelner Felder für die KI, kein Löschen (nur Archivieren) und kein Mailversand.
+- Vorschlag: Typen mit Personenbezug (Ansprechpartner, beratene Personen) sind für die KI standardmäßig gesperrt und lassen sich einzeln freischalten. Das unterstützt die Vorgabe, dass über die KI keine personenbezogenen Daten verarbeitet werden. Die Verantwortung dafür bleibt beim Nutzer.
 - Die Logik für Datenzugriff und Validierung liegt im Kern und wird von Oberfläche und MCP-Server gemeinsam genutzt.
-- Offen: Welche Tools genau, welche Felder sichtbar sind und ob die Datenschutzfreigabe die Übermittlung von Klartext an den KI-Anbieter einschließt.
+- Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein.
+- Offen: Welche Tools genau und welche Felder sichtbar sind.
 
 ## PDFs, Anhänge und Mail
 
 - PDFs (Antrag, Abrechnung) werden lokal erzeugt und in dem Ordner abgelegt, den die App je Rechner angegeben bekommt. Anhänge (Hotelrechnungen, Teilnahmebescheinigungen, Veranstalter-Formulare) liegen ebenfalls dort.
 - Die Synchronisation dieses Ordners übernimmt Nextcloud oder ein anderes Tool. Die App synchronisiert diese Dateien nicht.
-- Die Dateien liegen im Klartext auf dem verschlüsselten Laptop und im Nextcloud-Ordner. Ob der Nextcloud-Server vertrauenswürdig ist oder der Ordner zusätzlich verschlüsselt werden soll (zum Beispiel mit Cryptomator), ist offen.
+- Die Dateien liegen im Klartext auf dem verschlüsselten Laptop und im Nextcloud-Ordner. Der Ordner wird bewusst nicht zusätzlich verschlüsselt (entschieden).
 - Mail wird im Client per SMTP versendet. Die Zugangsdaten liegen im Schlüsselbund des Betriebssystems und werden nicht synchronisiert.
 
 ## Entscheidungen im Überblick
@@ -84,7 +86,7 @@ Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`se
 |---|---|
 | Architektur | Local-first mit verschlüsseltem Sync |
 | Client | Tauri, Oberfläche in TypeScript, Kern in Rust |
-| Server | Go (Rust als Alternative offen) |
+| Server | Go. Rust wurde erwogen: Der Go-Server baut auf 13 Fremdpaketen auf, ein Rust-Server auf etwa 40 (minimal) bis 80 (mit axum) Crates. Der Rust-Kern hat bereits 54. |
 | Sync | Eigenes schlankes Protokoll mit verschlüsselten Einzeleinträgen statt Evolu, Automerge oder CouchDB |
 | Entsperren | Master-Passwort und Recovery-Key |
 | KI | Lokaler MCP-Server im App-Prozess, von Anfang an |
