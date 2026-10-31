@@ -1,7 +1,10 @@
 # Dienstreisebuster
 
-Modul des BdB-Butlers (Ordner `dienstreisebuster/` im Repo `bdb-butler`). Läuft vorerst als eigenständige Django-App;
-IBAN, Adresse und SMTP-Passwort liegen derzeit unverschlüsselt in der Datenbank.
+Bestandstool im Repo `bdb-butler`, das durch das Dienstreisemodul der BdB-Butler-App abgelöst wird (Meilenstein 3,
+siehe `../docs/ANFORDERUNGEN.md` und `../docs/ARCHITEKTUR.md`). Der Name „Dienstreisebuster“ entfällt dann.
+Bis dahin läuft es unverändert als eigenständige Django-App. Es gehört nicht zur verschlüsselten Architektur der App:
+IBAN, Adresse und SMTP-Passwort liegen hier unverschlüsselt in der Datenbank. Neue Funktionen kommen nicht mehr
+hierher, sondern ins Dienstreisemodul der App.
 
 Web-App (Django, SQLite), die Dienstreiseanträge und Reisekostenabrechnungen als PDF erzeugt,
 per Mail verschickt und den Zahlungsstatus pro Reise verfolgt.
