@@ -428,13 +428,7 @@ impl Service {
             .filter(|(_, rec)| rec.kind() == kind && !rec.is_deleted())
             .map(|(id, rec)| view(id, &rec))
             .collect();
-        out.sort_by_key(|v| {
-            v.fields
-                .get(def.title_field)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_lowercase()
-        });
+        sort_views(&def, &mut out);
         Ok(out)
     }
 
@@ -537,6 +531,16 @@ impl Service {
             .map(|(id, rec)| view(id, &rec))
             .collect())
     }
+}
+
+/// Sortiert nach dem Sortierfeld des Typs (bei Daten auch zeitlich richtig), bei Gleichstand nach Titel.
+fn sort_views(def: &KindDef, views: &mut [RecordView]) {
+    let text = |v: &RecordView, field: &str| v.fields.get(field).and_then(Value::as_str).unwrap_or("").to_lowercase();
+    views.sort_by(|a, b| {
+        let primary = text(a, def.sort_field).cmp(&text(b, def.sort_field));
+        let primary = if def.sort_desc { primary.reverse() } else { primary };
+        primary.then_with(|| text(a, def.title_field).cmp(&text(b, def.title_field)))
+    });
 }
 
 fn view(id: String, rec: &Record) -> RecordView {
@@ -750,6 +754,36 @@ mod tests {
         assert!(matches!(s.get(&b), Err(ServiceError::NotFound)));
         assert!(matches!(s.delete(&b), Err(ServiceError::NotFound)));
         assert!(matches!(s.save("schule", Some(&b), &map(json!({"name": "x"}))), Err(ServiceError::NotFound)));
+    }
+
+    #[test]
+    fn lists_are_sorted_by_the_sort_field_of_the_kind() {
+        let (mut s, _) = unlocked_service();
+        // Beratungen: neueste zuerst, bei gleichem Datum nach Thema.
+        for (thema, datum) in [("Beta", "2026-03-01"), ("Alpha", "2026-03-01"), ("Älteste", "2025-12-24"), ("Neueste", "2026-10-31")] {
+            s.save("beratung", None, &map(json!({"thema": thema, "datum": datum}))).unwrap();
+        }
+        let themen: Vec<_> = s.list("beratung").unwrap().iter().map(|v| v.fields["thema"].as_str().unwrap().to_string()).collect();
+        assert_eq!(themen, ["Neueste", "Alpha", "Beta", "Älteste"]);
+    }
+
+    #[test]
+    fn markdown_texts_and_new_kinds_are_saved() {
+        let (mut s, _) = unlocked_service();
+        let schule = s.save("schule", None, &map(json!({"name": "Grundschule am See"}))).unwrap();
+        let person = s.save("beratene_person", None, &map(json!({"name": "Herr Müller", "schule": schule}))).unwrap();
+        let beratung = s
+            .save("beratung", None, &map(json!({"thema": "Tablet-Einsatz", "datum": "2026-10-30", "art": "Vor Ort", "dauer": 90, "schule": schule, "personen": [person], "inhalt": "# Ergebnis\n- [ ] Konzept schicken"})))
+            .unwrap();
+        let protokoll = s
+            .save("protokoll", None, &map(json!({"titel": "Beratung Tablets", "art": "Beratung", "datum": "2026-10-30", "beratung": beratung, "text": "Siehe [[Grundschule am See]]"})))
+            .unwrap();
+        assert_eq!(s.get(&protokoll).unwrap().fields["text"], "Siehe [[Grundschule am See]]");
+        assert_eq!(s.get(&beratung).unwrap().fields["dauer"], 90);
+        // Pflichtfelder und Auswahl der neuen Typen.
+        assert!(matches!(s.save("protokoll", None, &map(json!({"titel": "X", "datum": "2026-10-30"}))), Err(ServiceError::Invalid(_))), "Art ist Pflicht");
+        assert!(matches!(s.save("beratung", None, &map(json!({"thema": "X", "datum": "30.10.2026"}))), Err(ServiceError::Invalid(_))), "ungültiges Datum");
+        assert!(matches!(s.save("beratung", None, &map(json!({"thema": "X", "datum": "2026-10-30", "personen": [schule]}))), Err(ServiceError::Invalid(_))), "falscher Typ im Verweis");
     }
 
     #[test]

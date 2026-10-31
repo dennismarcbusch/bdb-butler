@@ -3,6 +3,7 @@
 export type FieldType =
   | { type: 'text' }
   | { type: 'long_text' }
+  | { type: 'markdown' }
   | { type: 'date' }
   | { type: 'date_time' }
   | { type: 'number' }
@@ -18,6 +19,8 @@ export interface KindDef {
   label: string;
   label_plural: string;
   title_field: string;
+  sort_field: string;
+  sort_desc: boolean;
   personal: boolean;
   fields: FieldDef[];
 }

@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
+import { useEffect, useId, useMemo, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
 import { emptyValues, toPayload, titleOf, valuesFromRecord, type FormValue, type FormValues } from '../form';
+import { titleIndex } from '../graph';
 import type { FieldDef, KindDef, RecordView } from '../types';
+import { MarkdownField } from './MarkdownField';
 
 interface Props {
   kind: KindDef;
@@ -11,6 +14,7 @@ interface Props {
   onSaved: (id: string) => void;
   onDeleted: () => void;
   onCancel: () => void;
+  onNavigate: (kind: string, id: string) => void;
 }
 
 interface Option {
@@ -18,12 +22,27 @@ interface Option {
   title: string;
 }
 
-export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel }: Props) {
+export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, onNavigate }: Props) {
   const [values, setValues] = useState<FormValues>(() => (record ? valuesFromRecord(kind, record) : emptyValues(kind)));
   const [options, setOptions] = useState<Record<string, Option[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Für Wikilinks in Markdown-Feldern: alle Einträge mit Titel.
+  const [all, setAll] = useState<RecordView[]>([]);
+  const hasMarkdown = kind.fields.some((f) => f.type === 'markdown');
+  useEffect(() => {
+    if (hasMarkdown) api.listAll().then(setAll, () => undefined);
+  }, [hasMarkdown]);
+  const resolve = useMemo(() => {
+    const index = titleIndex(all, kinds);
+    const byId = new Map(all.map((r) => [r.id, r]));
+    return (title: string) => {
+      const id = index.get(title.trim().toLowerCase());
+      const found = id ? byId.get(id) : undefined;
+      return found ? { kind: found.kind, id: found.id } : null;
+    };
+  }, [all, kinds]);
 
   // Auswahllisten für Verweise laden (einmal je Zieltyp).
   useEffect(() => {
@@ -82,7 +101,18 @@ export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel }
         <p class="muted">Enthält personenbezogene Daten. Für die KI gesperrt, solange du es nicht freigibst.</p>
       )}
       {kind.fields.map((field) => (
-        <Field key={field.name} field={field} value={values[field.name]} options={refOptions(field, options)} onChange={(v) => set(field.name, v)} />
+        field.type === 'markdown' ? (
+          <MarkdownField
+            key={field.name}
+            label={field.required ? `${field.label} *` : field.label}
+            value={typeof values[field.name] === 'string' ? (values[field.name] as string) : ''}
+            onChange={(v) => set(field.name, v)}
+            resolve={resolve}
+            onOpen={(target) => onNavigate(target.kind, target.id)}
+          />
+        ) : (
+          <Field key={field.name} field={field} value={values[field.name]} options={refOptions(field, options)} onChange={(v) => set(field.name, v)} />
+        )
       ))}
       {error && <p class="error" role="alert">{error}</p>}
       <div class="row">
@@ -114,17 +144,21 @@ interface FieldProps {
 }
 
 function Field({ field, value, options, onChange }: FieldProps) {
+  // Label und Steuerelement sind über `for` und `id` verbunden. Ein umschließendes Label würde bei
+  // Auswahlfeldern den Text aller Optionen in den Namen des Feldes aufnehmen.
+  const id = useId();
   const label = field.required ? `${field.label} *` : field.label;
   const text = typeof value === 'string' ? value : '';
+  const wrap = (control: ComponentChildren) => (
+    <div class="field">
+      <label for={id}>{label}</label>
+      {control}
+    </div>
+  );
 
   switch (field.type) {
     case 'long_text':
-      return (
-        <label>
-          {label}
-          <textarea rows={8} value={text} onInput={(e) => onChange(e.currentTarget.value)} />
-        </label>
-      );
+      return wrap(<textarea id={id} rows={8} value={text} onInput={(e) => onChange(e.currentTarget.value)} />);
     case 'bool':
       return (
         <label class="check">
@@ -133,28 +167,22 @@ function Field({ field, value, options, onChange }: FieldProps) {
         </label>
       );
     case 'choice':
-      return (
-        <label>
-          {label}
-          <select value={text} onChange={(e) => onChange(e.currentTarget.value)}>
-            <option value="">–</option>
-            {field.options.map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-          </select>
-        </label>
+      return wrap(
+        <select id={id} value={text} onChange={(e) => onChange(e.currentTarget.value)}>
+          <option value="">–</option>
+          {field.options.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>,
       );
     case 'ref':
-      return (
-        <label>
-          {label}
-          <select value={text} onChange={(e) => onChange(e.currentTarget.value)}>
-            <option value="">–</option>
-            {options.map((o) => (
-              <option key={o.id} value={o.id}>{o.title}</option>
-            ))}
-          </select>
-        </label>
+      return wrap(
+        <select id={id} value={text} onChange={(e) => onChange(e.currentTarget.value)}>
+          <option value="">–</option>
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>{o.title}</option>
+          ))}
+        </select>,
       );
     case 'ref_list': {
       const selected = Array.isArray(value) ? value : [];
@@ -169,7 +197,7 @@ function Field({ field, value, options, onChange }: FieldProps) {
                   type="checkbox"
                   checked={selected.includes(o.id)}
                   onChange={(e) =>
-                    onChange(e.currentTarget.checked ? [...selected, o.id] : selected.filter((id) => id !== o.id))
+                    onChange(e.currentTarget.checked ? [...selected, o.id] : selected.filter((x) => x !== o.id))
                   }
                 />
                 {o.title}
@@ -180,32 +208,12 @@ function Field({ field, value, options, onChange }: FieldProps) {
       );
     }
     case 'date':
-      return (
-        <label>
-          {label}
-          <input type="date" value={text} onInput={(e) => onChange(e.currentTarget.value)} />
-        </label>
-      );
+      return wrap(<input id={id} type="date" value={text} onInput={(e) => onChange(e.currentTarget.value)} />);
     case 'date_time':
-      return (
-        <label>
-          {label}
-          <input type="datetime-local" value={text} onInput={(e) => onChange(e.currentTarget.value)} />
-        </label>
-      );
+      return wrap(<input id={id} type="datetime-local" value={text} onInput={(e) => onChange(e.currentTarget.value)} />);
     case 'number':
-      return (
-        <label>
-          {label}
-          <input type="text" inputMode="decimal" value={text} onInput={(e) => onChange(e.currentTarget.value)} />
-        </label>
-      );
+      return wrap(<input id={id} type="text" inputMode="decimal" value={text} onInput={(e) => onChange(e.currentTarget.value)} />);
     default:
-      return (
-        <label>
-          {label}
-          <input type="text" value={text} onInput={(e) => onChange(e.currentTarget.value)} />
-        </label>
-      );
+      return wrap(<input id={id} type="text" value={text} onInput={(e) => onChange(e.currentTarget.value)} />);
   }
 }

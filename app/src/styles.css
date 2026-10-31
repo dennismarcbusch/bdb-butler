@@ -46,6 +46,8 @@ input[type='datetime-local'], select, textarea {
 textarea { resize: vertical; }
 label { display: block; margin: 0.6rem 0; font-size: 0.92rem; color: var(--muted); }
 label input:not([type='checkbox']), label select, label textarea { margin-top: 0.2rem; color: var(--text); }
+.field { margin: 0.6rem 0; }
+.field label { display: block; margin: 0 0 0.2rem; font-size: 0.92rem; color: var(--muted); }
 label.check { display: flex; align-items: center; gap: 0.5rem; color: var(--text); margin: 0.4rem 0; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0.8rem 0; padding: 0.2rem 0.8rem 0.6rem; }
 legend { padding: 0 0.3rem; color: var(--muted); font-size: 0.92rem; }
@@ -165,3 +167,24 @@ code { font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace; font-size: 
 .audit { width: 100%; border-collapse: collapse; margin-top: 0.6rem; font-size: 0.85rem; }
 .audit th, .audit td { text-align: left; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .audit th { color: var(--muted); font-weight: 600; }
+
+.markdown-field { margin: 0.8rem 0; }
+.markdown-head { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; }
+.field-label { color: var(--muted); font-size: 0.92rem; }
+.tabs.small { margin: 0; }
+.tabs.small button { padding: 0.2rem 0.6rem; font-size: 0.85rem; flex: none; }
+textarea.markdown-source { font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace; font-size: 0.92rem; margin-top: 0.3rem; }
+.markdown-preview { border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.9rem; margin-top: 0.3rem; background: var(--panel); min-height: 6rem; }
+.markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 1rem 0 0.4rem; }
+.markdown p { margin: 0.5rem 0; }
+.markdown ul, .markdown ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+.markdown li.task { list-style: none; margin-left: -1.2rem; }
+.markdown li.task input { margin-right: 0.45rem; }
+.markdown blockquote { margin: 0.5rem 0; padding: 0.1rem 0.9rem; border-left: 3px solid var(--border); color: var(--muted); }
+.markdown pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem; overflow-x: auto; }
+.markdown code { background: var(--bg); padding: 0.05rem 0.25rem; border-radius: 4px; }
+.markdown pre code { background: none; padding: 0; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+.markdown a { color: var(--accent); }
+button.wikilink { border: none; background: none; color: var(--accent); padding: 0; text-decoration: underline dotted; cursor: pointer; font: inherit; }
+span.wikilink.missing { color: var(--danger); text-decoration: underline dotted; cursor: help; }

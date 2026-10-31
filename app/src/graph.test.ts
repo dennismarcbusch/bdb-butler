@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { buildGraph, layout, neighbors, related, type Graph } from './graph';
+import { buildGraph, layout, neighbors, related, titleIndex, type Graph } from './graph';
 import type { KindDef, RecordView } from './types';
 
 const kinds: KindDef[] = [
   {
-    kind: 'schule', label: 'Schule', label_plural: 'Schulen', title_field: 'name', personal: false,
+    kind: 'schule', label: 'Schule', label_plural: 'Schulen', title_field: 'name', sort_field: 'name', sort_desc: false, personal: false,
     fields: [{ name: 'name', label: 'Name', type: 'text', required: true }],
   },
   {
-    kind: 'person', label: 'Person', label_plural: 'Personen', title_field: 'name', personal: true,
+    kind: 'person', label: 'Person', label_plural: 'Personen', title_field: 'name', sort_field: 'name', sort_desc: false, personal: true,
     fields: [
       { name: 'name', label: 'Name', type: 'text', required: true },
       { name: 'schule', label: 'Schule', type: 'ref', kind: 'schule', required: false },
@@ -72,6 +72,45 @@ describe('related', () => {
     expect(forP1.filter((r) => r.direction === 'in').map((r) => r.record.id)).toEqual(['p2']);
     expect(related(records, kinds, 'p4')).toEqual([]);
     expect(related(records, kinds, 'gibt-es-nicht')).toEqual([]);
+  });
+});
+
+describe('Wikilinks', () => {
+  const withMarkdown: KindDef[] = [
+    ...kinds,
+    {
+      kind: 'protokoll', label: 'Protokoll', label_plural: 'Protokolle', title_field: 'titel', sort_field: 'titel', sort_desc: false, personal: true,
+      fields: [
+        { name: 'titel', label: 'Titel', type: 'text', required: true },
+        { name: 'text', label: 'Protokoll', type: 'markdown', required: false },
+      ],
+    },
+  ];
+  const base = [rec('s1', 'schule', { name: 'Grundschule' }), rec('p1', 'person', { name: 'Weber' })];
+
+  it('machen aus [[Titel]] in Markdown-Feldern Kanten, ohne auf Groß- und Kleinschreibung zu achten', () => {
+    const g = buildGraph([...base, rec('m1', 'protokoll', { titel: 'Besprechung', text: 'Mit [[grundschule]] und [[Weber|Frau Weber]].' })], withMarkdown);
+    expect(g.edges.map((e) => [e.source, e.target].sort().join('-')).sort()).toEqual(['m1-p1', 'm1-s1']);
+  });
+
+  it('ignorieren unbekannte, mehrdeutige und selbstbezogene Titel sowie Code', () => {
+    const g = buildGraph(
+      [
+        rec('s1', 'schule', { name: 'Doppelt' }), rec('s2', 'schule', { name: 'Doppelt' }),
+        rec('m1', 'protokoll', { titel: 'Notiz', text: '[[Gibt es nicht]] [[Doppelt]] [[Notiz]] `[[Doppelt]]`' }),
+      ],
+      withMarkdown,
+    );
+    expect(g.edges).toEqual([]);
+    expect(titleIndex(g.nodes.map((n) => rec(n.id, n.kind, n.kind === 'protokoll' ? { titel: n.label } : { name: n.label })), withMarkdown).get('doppelt')).toBeNull();
+  });
+
+  it('erscheinen in den verknüpften Einträgen beider Seiten', () => {
+    const records = [...base, rec('m1', 'protokoll', { titel: 'Besprechung', text: 'Siehe [[Grundschule]]' })];
+    const out = related(records, withMarkdown, 'm1');
+    expect(out.map((r) => [r.record.id, r.direction, r.fieldLabel])).toEqual([['s1', 'out', 'Protokoll']]);
+    const incoming = related(records, withMarkdown, 's1');
+    expect(incoming.map((r) => [r.record.id, r.direction])).toEqual([['m1', 'in']]);
   });
 });
 

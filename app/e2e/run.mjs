@@ -221,7 +221,7 @@ async function main() {
       await page.getByText('Enthält personenbezogene Daten').waitFor();
       await page.getByLabel('Name *').fill('Frau Weber');
       await page.getByLabel('Rolle').selectOption('Schulleitung');
-      await page.getByLabel('Schule').selectOption({ label: 'Grundschule am See' });
+      await page.getByLabel('Schule', { exact: true }).selectOption({ label: 'Grundschule am See' });
       await page.getByRole('button', { name: 'Speichern' }).click();
       await page.getByRole('heading', { name: 'Frau Weber' }).waitFor();
       assert.equal(await page.getByLabel('Rolle').inputValue(), 'Schulleitung');
@@ -478,6 +478,131 @@ async function main() {
       await again.close();
     });
 
+    await step('Beratungen und Protokolle: Markdown, Wikilinks, Aufgaben, Sicherheit', async () => {
+      const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
+
+      // Beratene Person (personenbezogen) und zwei Beratungen.
+      await nav('Beratene Personen');
+      await page.getByRole('button', { name: 'Beratene Person anlegen' }).click();
+      await page.getByLabel('Name *').fill('Herr Müller');
+      await page.getByLabel('Schule', { exact: true }).selectOption({ label: 'Grundschule am See' });
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Herr Müller' }).waitFor();
+
+      await nav('Beratungen');
+      await page.getByRole('button', { name: 'Beratung anlegen' }).click();
+      await page.getByLabel('Thema *').fill('Tablet-Einsatz im Unterricht');
+      await page.getByLabel('Datum *').fill('2026-10-30');
+      await page.getByLabel('Art').selectOption('Vor Ort');
+      await page.getByLabel('Dauer in Minuten').fill('90');
+      await page.getByLabel('Schule', { exact: true }).selectOption({ label: 'Grundschule am See' });
+      await page.getByRole('group', { name: 'Beratene Personen' }).getByLabel('Herr Müller').check();
+      await page.getByLabel('Inhalt und Ergebnis', { exact: true }).fill('Medienkonzept besprochen.');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Tablet-Einsatz im Unterricht' }).waitFor();
+
+      await page.getByRole('button', { name: 'Beratung anlegen' }).click();
+      await page.getByLabel('Thema *').fill('Neuere Beratung');
+      await page.getByLabel('Datum *').fill('2026-11-05');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Neuere Beratung' }).waitFor();
+      const titles = await page.getByRole('region', { name: 'Beratungen' }).locator('li button').allInnerTexts();
+      assert.deepEqual(titles, ['Neuere Beratung', 'Tablet-Einsatz im Unterricht'], 'neueste Beratung zuerst');
+      // Ungültiges Datum wird abgelehnt.
+      await page.getByRole('button', { name: 'Beratung anlegen' }).click();
+      await page.getByLabel('Thema *').fill('Mit falschem Datum');
+      await page.getByLabel('Datum *').fill('');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('alert').filter({ hasText: 'Pflichtfeld' }).waitFor();
+      await page.getByRole('button', { name: 'Abbrechen' }).click();
+
+      // Protokoll mit Markdown, Wikilinks, Aufgaben und eingeschleustem Skript.
+      await nav('Protokolle');
+      await page.getByRole('button', { name: 'Protokoll anlegen' }).click();
+      await page.getByText('Enthält personenbezogene Daten').waitFor();
+      await page.getByLabel('Titel *').fill('Beratung Tablets');
+      await page.getByLabel('Art *').selectOption('Beratung');
+      await page.getByLabel('Datum *').fill('2026-10-30');
+      await page.getByLabel('Beratung', { exact: true }).selectOption({ label: 'Tablet-Einsatz im Unterricht' });
+      const source = [
+        '# Ergebnis',
+        'Besprochen mit [[Grundschule am See]] und [[Gibt es nicht]].',
+        '',
+        '**Wichtig:** <script>window.__xss = 1</script> [böse](javascript:alert(1))',
+        '',
+        '- [ ] Konzept schicken',
+        '- [x] Termin vereinbart',
+      ].join('\n');
+      await page.getByRole('textbox', { name: 'Protokoll (Markdown)' }).fill(source);
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Beratung Tablets' }).waitFor();
+
+      await page.getByRole('tab', { name: 'Vorschau' }).click();
+      const preview = page.getByLabel('Protokoll (Markdown): Vorschau');
+      await preview.getByRole('heading', { name: 'Ergebnis' }).waitFor();
+      await preview.locator('strong', { hasText: 'Wichtig:' }).waitFor();
+      await preview.getByRole('button', { name: 'Grundschule am See' }).waitFor();
+      assert.equal(await preview.locator('.wikilink.missing').innerText(), 'Gibt es nicht');
+      assert.ok((await preview.innerText()).includes('<script>window.__xss = 1</script>'), 'HTML wird als Text angezeigt');
+      assert.equal(await page.evaluate(() => window.__xss), undefined, 'Skripte dürfen nicht laufen');
+      assert.equal(await preview.locator('script').count(), 0);
+      assert.equal(await preview.locator('a[href^="javascript"]').count(), 0, 'gefährliche Links entfallen');
+      assert.equal(await preview.getByRole('checkbox').count(), 2);
+      assert.equal(await preview.getByRole('checkbox', { name: 'Aufgabe: Termin vereinbart' }).isChecked(), true);
+      await shot(page, '13-protokoll-vorschau');
+
+      // Aufgabe in der Vorschau abhaken: der Quelltext ändert sich.
+      await preview.getByRole('checkbox', { name: 'Aufgabe: Konzept schicken' }).check();
+      await page.getByRole('tab', { name: 'Bearbeiten' }).click();
+      assert.match(await page.getByRole('textbox', { name: 'Protokoll (Markdown)' }).inputValue(), /- \[x\] Konzept schicken/);
+      await page.getByRole('button', { name: 'Speichern' }).click();
+
+      // Wikilink führt zum Eintrag.
+      await page.getByRole('tab', { name: 'Vorschau' }).click();
+      await preview.getByRole('button', { name: 'Grundschule am See' }).click();
+      await page.getByRole('heading', { name: 'Grundschule am See' }).waitFor();
+      await page.locator('.related').getByRole('button', { name: 'Beratung Tablets' }).waitFor();
+
+      // Im Graphen verbindet der Wikilink Protokoll und Schule.
+      await nav('Graph');
+      await page.getByRole('button', { name: 'Protokoll: Beratung Tablets' }).click();
+      const panel = page.getByRole('complementary', { name: 'Auswahl' });
+      await panel.getByRole('button', { name: /Grundschule am See/ }).waitFor();
+      await panel.getByRole('button', { name: /Tablet-Einsatz im Unterricht/ }).waitFor();
+      await shot(page, '14-graph-protokoll');
+    });
+
+    await step('Protokolltext: gleichzeitige Änderung ergibt eine Konfliktkopie, nichts geht verloren', async () => {
+      await bridgeCall(bridgeA, 'sync');
+      await bridgeCall(bridgeB, 'sync');
+      const list = await bridgeCall(bridgeB, 'list', { kind: 'protokoll' });
+      assert.equal(list.length, 1, 'Gerät B hat das Protokoll');
+      const id = list[0].id;
+      await bridgeCall(bridgeB, 'save', { kind: 'protokoll', id, fields: { text: 'Fassung von Gerät B' } });
+      await bridgeCall(bridgeB, 'sync');
+
+      await page.getByRole('navigation').getByRole('button', { name: 'Protokolle', exact: true }).click();
+      await page.getByRole('button', { name: 'Beratung Tablets' }).click();
+      await page.getByRole('textbox', { name: 'Protokoll (Markdown)' }).fill('Fassung von Gerät A');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Beratung Tablets' }).waitFor();
+
+      await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
+      await page.getByRole('button', { name: 'Jetzt abgleichen' }).click();
+      await page.getByRole('navigation').getByRole('button', { name: /^Konflikte \(1\)$/ }).waitFor();
+      await page.getByRole('navigation').getByRole('button', { name: /^Konflikte/ }).click();
+      await page.getByText('Fassung von Gerät A').waitFor();
+      await page.getByText('Fassung von Gerät B').waitFor();
+      await shot(page, '15-protokoll-konflikt');
+
+      // Den anderen Text übernehmen.
+      const current = (await bridgeCall(bridgeA, 'get', { id })).fields.text;
+      const other = current === 'Fassung von Gerät A' ? 'Fassung von Gerät B' : 'Fassung von Gerät A';
+      await page.getByRole('button', { name: 'Anderen Wert übernehmen' }).click();
+      await page.getByText('Keine offenen Konflikte.').waitFor();
+      assert.equal((await bridgeCall(bridgeA, 'get', { id })).fields.text, other);
+    });
+
     await step('Einstellungen: Passwort ändern', async () => {
       await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
       await page.getByLabel('Aktuelles Passwort').fill('falsches passwort hier');
@@ -502,12 +627,12 @@ async function main() {
 
     await step('Keine unerwarteten Fehler in der Browser-Konsole', async () => {
       // Die Brücke antwortet auf Fehler mit HTTP 400, die der Test absichtlich auslöst (falsches Passwort,
-      // fehlendes Pflichtfeld, ungültiger Recovery-Key). Der Browser protokolliert sie als Ladefehler.
+      // fehlende Pflichtfelder, ungültiger Recovery-Key). Der Browser protokolliert sie als Ladefehler.
       const expected = /^Failed to load resource: the server responded with a status of 400/;
       const unexpected = consoleErrors.filter((m) => !expected.test(m));
       assert.deepEqual(unexpected, [], unexpected.join('\n'));
       const provoked = consoleErrors.length - unexpected.length;
-      assert.equal(provoked, 5, `${provoked} statt 5 erwarteter Fehlerantworten`);
+      assert.equal(provoked, 6, `${provoked} statt 6 erwarteter Fehlerantworten`);
     });
   } finally {
     await browser.close();

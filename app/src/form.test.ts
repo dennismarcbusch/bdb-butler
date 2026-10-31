@@ -7,6 +7,8 @@ const kind: KindDef = {
   label: 'Test',
   label_plural: 'Tests',
   title_field: 'name',
+  sort_field: 'name',
+  sort_desc: false,
   personal: false,
   fields: [
     { name: 'name', label: 'Name', type: 'text', required: true },

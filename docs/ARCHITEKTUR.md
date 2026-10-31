@@ -22,7 +22,7 @@ Local-first. Jeder Rechner hält alle Daten in einer lokalen Datenbank. Ein Serv
 
 | Ordner | Sprache | Inhalt | Stand |
 |---|---|---|---|
-| `core/` | Rust | Krypto-Kern, Eintragsmodell, lokale Datenbank und Sync-Client; später MCP-Server. Wird von der App eingebunden. | Krypto, Einträge, Datenbank, Sync-Client angelegt und getestet (auch gegen den echten Go-Server) |
+| `core/` | Rust | Krypto-Kern, Eintragsmodell, lokale Datenbank, Sync-Client, Dienstschicht und lokaler MCP-Server. Wird von der App eingebunden. | Krypto, Einträge, Datenbank, Sync-Client angelegt und getestet (auch gegen den echten Go-Server) |
 | `server/` | Go | Sync-Server für Chiffretext. | angelegt und getestet |
 | `app/` | TypeScript (Preact), Rust (Tauri) | Oberfläche und Tauri-Hülle. Die Hülle hat nur einen Befehl `call`, der an `bdb_core::api::call` weiterreicht. | Einrichten, Entsperren, Einstellungen, Listen und Formulare, Konflikte; Hülle kompiliert, Oberfläche im Browser gegen den Kern getestet |
 | `dienstreisebuster/` | Python (Django) | Bestandstool, wird durch das Dienstreisemodul in der App abgelöst. | läuft weiter bis Meilenstein 3 |
@@ -110,3 +110,12 @@ Begründung für das eigene Sync-Protokoll: Es gibt genau einen Nutzer und wenig
 - **Graph-Ansicht** (`app/src/graph.ts`, `GraphView.tsx`): Knoten sind alle Einträge, Kanten ergeben sich aus den Verweisfeldern der Typdefinitionen. Neue Typen mit Verweisen erscheinen damit automatisch. Das Layout ist ein kraftbasiertes Verfahren (Fruchterman und Reingold) mit deterministischen Startpositionen, festem Wunschabstand (110 Einheiten) und Schwerkraft (0.3). Die Werte sind per Messreihe gewählt: Ein Wunschabstand, der von der Zeichenfläche abhängt, ergab für wenige Knoten riesige Abstände, und zu schwache Schwerkraft ließ unverbundene Knoten an den Rand wandern und verbundene zu einem Haufen zusammenrücken. Die Ansicht hat Zoomen, Verschieben, Auswahl mit Nachbarn, Hervorheben per Suche und Filter nach Typ. In jedem Eintrag steht außerdem die Liste der verknüpften Einträge.
 - Das Master-Passwort mindestens 10 Zeichen. Nach 15 Minuten ohne Eingabe sperrt sich die App.
 - Einstellungen dieses Rechners (Server, Token, Ordner für Anhänge) liegen in `settings.json` im Datenordner der App (Zugriffsrechte 0600 unter Linux). Das Token schützt nur den Zugriff auf Chiffretext. Eine Ablage im Schlüsselbund des Betriebssystems ist für die Mail-Zugangsdaten vorgesehen.
+
+## Beratungen, Protokolle und Markdown
+
+- Typen (`core/src/schema.rs`): `beratene_person` (personenbezogen), `beratung` (verweist per ID auf Personen, nicht personenbezogen), `protokoll` (Art: Beratung, Jour fixe, Dienstbesprechung, Sonstiges; Verweise auf Schule und Beratung; Text als Markdown). **Protokolle sind für die KI zunächst gesperrt**, weil sie oft Personen nennen. Der Nutzer kann sie in den Einstellungen freigeben. Listen sortieren je Typ nach einem eigenen Feld (Beratungen und Protokolle: neueste zuerst).
+- Markdown-Parser (`app/src/markdown.ts`): erzeugt einen Syntaxbaum, kein HTML. Die Oberfläche setzt den Baum in Preact-Knoten um, eingegebenes HTML und Skripte werden als Text angezeigt. Links sind nur mit `http:`, `https:` und `mailto:` erlaubt. Unterstützt werden Überschriften, Absätze (Zeilenumbrüche bleiben), verschachtelte und nummerierte Listen, Aufgaben (`- [ ]`), Zitate, Codeblöcke, **fett**, *kursiv*, `Code`, Links und Wikilinks.
+- Wikilinks `[[Titel]]` und `[[Titel|Anzeigetext]]` verweisen auf Einträge mit diesem Titel (ohne Beachtung der Schreibweise, über alle Typen). Ist ein Titel mehrdeutig, bleibt der Link unaufgelöst, statt irgendeinen Eintrag zu treffen. Wikilinks in Markdown-Feldern erscheinen als Kanten im Graphen und in den verknüpften Einträgen beider Seiten.
+- Aufgaben lassen sich in der Vorschau abhaken, das ändert den Quelltext.
+- Gleichzeitige Änderungen am Protokolltext zweier Rechner ergeben einen Konflikteintrag mit beiden Fassungen (siehe „Konflikte“). Der Nutzer kann die andere Fassung mit einem Klick übernehmen.
+- Formulare verbinden Beschriftung und Eingabefeld über `for` und `id`. Ein umschließendes Label würde bei Auswahlfeldern den Text aller Optionen in den Namen des Feldes aufnehmen.

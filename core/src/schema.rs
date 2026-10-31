@@ -9,8 +9,10 @@ use serde_json::Value;
 pub enum FieldType {
     /// Einzeiliger Text.
     Text,
-    /// Mehrzeiliger Text (zum Beispiel Markdown).
+    /// Mehrzeiliger Text.
     LongText,
+    /// Mehrzeiliger Text im Markdown-Format (mit Wikilinks `[[Titel]]`).
+    Markdown,
     /// Datum `JJJJ-MM-TT`.
     Date,
     /// Datum und Uhrzeit `JJJJ-MM-TTTHH:MM`.
@@ -40,6 +42,10 @@ pub struct KindDef {
     pub label_plural: &'static str,
     /// Feld, das in Listen als Titel erscheint.
     pub title_field: &'static str,
+    /// Feld, nach dem Listen sortiert werden (Texte und Daten sortieren alphabetisch, `YYYY-MM-DD` auch zeitlich).
+    pub sort_field: &'static str,
+    /// Absteigend sortieren (neueste zuerst).
+    pub sort_desc: bool,
     /// Typen mit Personenbezug sind für die KI standardmäßig gesperrt.
     pub personal: bool,
     pub fields: Vec<FieldDef>,
@@ -51,6 +57,18 @@ const fn text(name: &'static str, label: &'static str, required: bool) -> FieldD
 
 const fn long_text(name: &'static str, label: &'static str) -> FieldDef {
     FieldDef { name, label, field_type: FieldType::LongText, required: false }
+}
+
+const fn markdown(name: &'static str, label: &'static str) -> FieldDef {
+    FieldDef { name, label, field_type: FieldType::Markdown, required: false }
+}
+
+const fn date(name: &'static str, label: &'static str, required: bool) -> FieldDef {
+    FieldDef { name, label, field_type: FieldType::Date, required }
+}
+
+const fn number(name: &'static str, label: &'static str) -> FieldDef {
+    FieldDef { name, label, field_type: FieldType::Number, required: false }
 }
 
 const fn choice(name: &'static str, label: &'static str, options: &'static [&'static str]) -> FieldDef {
@@ -65,6 +83,11 @@ const fn reference_list(name: &'static str, label: &'static str, kind: &'static 
     FieldDef { name, label, field_type: FieldType::RefList { kind }, required: false }
 }
 
+const fn required(mut def: FieldDef) -> FieldDef {
+    def.required = true;
+    def
+}
+
 pub const SCHULARTEN: &[&str] = &[
     "Grundschule",
     "Mittelschule",
@@ -76,6 +99,10 @@ pub const SCHULARTEN: &[&str] = &[
     "Fach- und Berufsoberschule",
     "Sonstige",
 ];
+
+pub const BERATUNGSARTEN: &[&str] = &["Vor Ort", "Online", "Telefon", "Schriftlich"];
+
+pub const PROTOKOLLARTEN: &[&str] = &["Beratung", "Jour fixe", "Dienstbesprechung", "Sonstiges"];
 
 pub const ROLLEN: &[&str] = &[
     "Schulleitung",
@@ -96,6 +123,8 @@ pub fn kinds() -> Vec<KindDef> {
             label: "Schule",
             label_plural: "Schulen",
             title_field: "name",
+            sort_field: "name",
+            sort_desc: false,
             personal: false,
             fields: vec![
                 text("name", "Name", true),
@@ -115,6 +144,8 @@ pub fn kinds() -> Vec<KindDef> {
             label: "Ansprechpartner",
             label_plural: "Ansprechpartner",
             title_field: "name",
+            sort_field: "name",
+            sort_desc: false,
             personal: true,
             fields: vec![
                 text("name", "Name", true),
@@ -124,6 +155,60 @@ pub fn kinds() -> Vec<KindDef> {
                 text("telefon", "Telefon", false),
                 reference_list("verknuepfungen", "Verknüpft mit", "ansprechpartner"),
                 long_text("notizen", "Notizen"),
+            ],
+        },
+        KindDef {
+            kind: "beratene_person",
+            label: "Beratene Person",
+            label_plural: "Beratene Personen",
+            title_field: "name",
+            sort_field: "name",
+            sort_desc: false,
+            personal: true,
+            fields: vec![
+                text("name", "Name", true),
+                text("funktion", "Funktion", false),
+                reference("schule", "Schule", "schule"),
+                text("email", "E-Mail", false),
+                text("telefon", "Telefon", false),
+                long_text("notizen", "Notizen"),
+            ],
+        },
+        KindDef {
+            kind: "beratung",
+            label: "Beratung",
+            label_plural: "Beratungen",
+            title_field: "thema",
+            sort_field: "datum",
+            sort_desc: true,
+            personal: false,
+            fields: vec![
+                text("thema", "Thema", true),
+                date("datum", "Datum", true),
+                choice("art", "Art", BERATUNGSARTEN),
+                number("dauer", "Dauer in Minuten"),
+                reference("schule", "Schule", "schule"),
+                reference_list("personen", "Beratene Personen", "beratene_person"),
+                markdown("inhalt", "Inhalt und Ergebnis"),
+            ],
+        },
+        KindDef {
+            kind: "protokoll",
+            label: "Protokoll",
+            label_plural: "Protokolle",
+            title_field: "titel",
+            sort_field: "datum",
+            sort_desc: true,
+            // Protokolle nennen oft Personen. Deshalb sind sie für die KI zunächst gesperrt.
+            personal: true,
+            fields: vec![
+                text("titel", "Titel", true),
+                required(choice("art", "Art", PROTOKOLLARTEN)),
+                date("datum", "Datum", true),
+                text("teilnehmer", "Teilnehmer", false),
+                reference("schule", "Schule", "schule"),
+                reference("beratung", "Beratung", "beratung"),
+                markdown("text", "Protokoll (Markdown)"),
             ],
         },
     ]
@@ -157,7 +242,7 @@ pub fn normalize(def: &FieldDef, value: &Value) -> Result<Value, ValueError> {
     }
     let label = def.label;
     match &def.field_type {
-        FieldType::Text | FieldType::LongText | FieldType::Date | FieldType::DateTime | FieldType::Choice { .. } | FieldType::Ref { .. } => {
+        FieldType::Text | FieldType::LongText | FieldType::Markdown | FieldType::Date | FieldType::DateTime | FieldType::Choice { .. } | FieldType::Ref { .. } => {
             let Some(text) = value.as_str() else {
                 return invalid(format!("{label}: Text erwartet"));
             };
@@ -167,7 +252,7 @@ pub fn normalize(def: &FieldDef, value: &Value) -> Result<Value, ValueError> {
             }
             match &def.field_type {
                 FieldType::Text => check_len(label, text, MAX_TEXT)?,
-                FieldType::LongText => check_len(label, text, MAX_LONG_TEXT)?,
+                FieldType::LongText | FieldType::Markdown => check_len(label, text, MAX_LONG_TEXT)?,
                 FieldType::Date => check_date(label, text)?,
                 FieldType::DateTime => check_datetime(label, text)?,
                 FieldType::Choice { options } => {
@@ -308,6 +393,7 @@ mod tests {
 
         for k in &all {
             assert!(k.fields.iter().any(|f| f.name == k.title_field), "{}: Titelfeld fehlt", k.kind);
+            assert!(k.fields.iter().any(|f| f.name == k.sort_field), "{}: Sortierfeld fehlt", k.kind);
             let mut fields: Vec<_> = k.fields.iter().map(|f| f.name).collect();
             fields.sort();
             fields.dedup();
@@ -327,6 +413,9 @@ mod tests {
     #[test]
     fn persons_are_marked_personal() {
         assert!(kind("ansprechpartner").unwrap().personal);
+        assert!(kind("beratene_person").unwrap().personal);
+        assert!(kind("protokoll").unwrap().personal, "Protokolle nennen oft Personen und sind zunächst gesperrt");
+        assert!(!kind("beratung").unwrap().personal, "Beratungen verweisen nur per ID auf Personen");
         assert!(!kind("schule").unwrap().personal);
         assert!(kind("gibt-es-nicht").is_none());
     }

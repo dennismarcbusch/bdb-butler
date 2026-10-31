@@ -1,6 +1,7 @@
 // Graph der Einträge: Knoten sind Einträge, Kanten sind Verweise zwischen ihnen. Die Verweise ergeben sich
 // aus den Typdefinitionen (Felder vom Typ `ref` und `ref_list`), neue Typen erscheinen damit automatisch.
 
+import { wikilinks } from './markdown';
 import type { KindDef, RecordView } from './types';
 
 export interface GraphNode {
@@ -24,14 +25,43 @@ export interface Point {
   y: number;
 }
 
-function targetsOf(record: RecordView, kind: KindDef): { field: string; id: string }[] {
+/**
+ * Index von Titeln (klein geschrieben) auf Eintrags-IDs für Wikilinks. Ist ein Titel mehrdeutig (mehrere
+ * Einträge heißen gleich), steht `null` im Index: Der Link bleibt dann unaufgelöst, statt irgendeinen Eintrag zu
+ * treffen.
+ */
+export function titleIndex(records: RecordView[], kinds: KindDef[]): Map<string, string | null> {
+  const byKind = new Map(kinds.map((k) => [k.kind, k]));
+  const index = new Map<string, string | null>();
+  for (const record of records) {
+    const kind = byKind.get(record.kind);
+    const title = kind ? record.fields[kind.title_field] : undefined;
+    if (typeof title !== 'string' || title.trim() === '') continue;
+    const key = title.trim().toLowerCase();
+    index.set(key, index.has(key) ? null : record.id);
+  }
+  return index;
+}
+
+function targetsOf(
+  record: RecordView,
+  kind: KindDef,
+  index: Map<string, string | null>,
+): { field: string; id: string }[] {
   const out: { field: string; id: string }[] = [];
   for (const field of kind.fields) {
-    if (field.type !== 'ref' && field.type !== 'ref_list') continue;
     const value = record.fields[field.name];
-    const ids = Array.isArray(value) ? value : [value];
-    for (const id of ids) {
-      if (typeof id === 'string') out.push({ field: field.name, id });
+    if (field.type === 'ref' || field.type === 'ref_list') {
+      const ids = Array.isArray(value) ? value : [value];
+      for (const id of ids) {
+        if (typeof id === 'string') out.push({ field: field.name, id });
+      }
+    } else if (field.type === 'markdown' && typeof value === 'string') {
+      // Wikilinks [[Titel]] verweisen auf Einträge mit diesem Titel.
+      for (const title of wikilinks(value)) {
+        const id = index.get(title.trim().toLowerCase());
+        if (id) out.push({ field: field.name, id });
+      }
     }
   }
   return out;
@@ -46,6 +76,7 @@ function labelOf(record: RecordView, kind: KindDef | undefined): string {
 export function buildGraph(records: RecordView[], kinds: KindDef[]): Graph {
   const byKind = new Map(kinds.map((k) => [k.kind, k]));
   const known = new Set(records.map((r) => r.id));
+  const index = titleIndex(records, kinds);
   const nodes: GraphNode[] = records.map((r) => ({ id: r.id, kind: r.kind, label: labelOf(r, byKind.get(r.kind)) }));
 
   const seen = new Set<string>();
@@ -53,7 +84,7 @@ export function buildGraph(records: RecordView[], kinds: KindDef[]): Graph {
   for (const record of records) {
     const kind = byKind.get(record.kind);
     if (!kind) continue;
-    for (const { id } of targetsOf(record, kind)) {
+    for (const { id } of targetsOf(record, kind, index)) {
       if (id === record.id || !known.has(id)) continue;
       const key = record.id < id ? `${record.id}|${id}` : `${id}|${record.id}`;
       if (seen.has(key)) continue;
@@ -85,6 +116,7 @@ export interface Related {
 export function related(records: RecordView[], kinds: KindDef[], id: string): Related[] {
   const byKind = new Map(kinds.map((k) => [k.kind, k]));
   const byId = new Map(records.map((r) => [r.id, r]));
+  const index = titleIndex(records, kinds);
   const self = byId.get(id);
   const out: Related[] = [];
 
@@ -93,7 +125,7 @@ export function related(records: RecordView[], kinds: KindDef[], id: string): Re
   if (self) {
     const kind = byKind.get(self.kind);
     if (kind) {
-      for (const t of targetsOf(self, kind)) {
+      for (const t of targetsOf(self, kind, index)) {
         const other = byId.get(t.id);
         if (other && other.id !== id) out.push({ record: other, direction: 'out', fieldLabel: label(kind, t.field) });
       }
@@ -103,7 +135,7 @@ export function related(records: RecordView[], kinds: KindDef[], id: string): Re
     if (record.id === id) continue;
     const kind = byKind.get(record.kind);
     if (!kind) continue;
-    for (const t of targetsOf(record, kind)) {
+    for (const t of targetsOf(record, kind, index)) {
       if (t.id === id) out.push({ record, direction: 'in', fieldLabel: label(kind, t.field) });
     }
   }

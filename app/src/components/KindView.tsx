@@ -79,6 +79,7 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
               onChanged();
             }}
             onCancel={() => setSelected(null)}
+            onNavigate={onNavigate}
           />
         )}
         {current && <RelatedList kinds={kinds} recordId={current.id} revision={revision} onOpen={onNavigate} />}
