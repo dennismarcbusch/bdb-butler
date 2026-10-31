@@ -25,6 +25,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 - Ein lokaler MCP-Server in der App ist von Anfang an vorgesehen. Per KI sollen Daten angelegt, abgefragt und bearbeitet werden können.
 - Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein. Der Nutzer achtet selbst darauf, dass über die KI keine personenbezogenen Daten verarbeitet werden.
+- Typen mit Personenbezug (Ansprechpartner, beratene Personen) sind für die KI standardmäßig gesperrt und einzeln freischaltbar.
 
 ## Funktionsbereiche
 
@@ -80,7 +81,6 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 ## Offene Punkte
 
-- MCP-Server: Welche Tools genau und welche Felder für die KI sichtbar sind (Vorschlag in `ARCHITEKTUR.md`).
+- MCP-Server: Welche Tools genau und welche weiteren Felder für die KI sichtbar sind.
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen.
-- Verarbeitungsverzeichnis an die neue Architektur anpassen (Sync-Server mit Chiffretext).
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

@@ -68,7 +68,7 @@ Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`se
 - Läuft im Prozess der App und hat damit Zugriff auf den entsperrten Datenschlüssel. Er funktioniert nur, solange die App läuft und entsperrt ist.
 - Er lauscht ausschließlich auf localhost und verlangt ein Token. Claude Desktop oder Claude Code verbinden sich per HTTP, gegebenenfalls über einen kleinen stdio-Vermittler.
 - Geplante Eigenschaften: Zugriffsstufen (nur lesen, lesen und schreiben), ein Protokoll der Schreibzugriffe, einstellbare Sichtbarkeit einzelner Felder für die KI, kein Löschen (nur Archivieren) und kein Mailversand.
-- Vorschlag: Typen mit Personenbezug (Ansprechpartner, beratene Personen) sind für die KI standardmäßig gesperrt und lassen sich einzeln freischalten. Das unterstützt die Vorgabe, dass über die KI keine personenbezogenen Daten verarbeitet werden. Die Verantwortung dafür bleibt beim Nutzer.
+- Entschieden: Typen mit Personenbezug (Ansprechpartner, beratene Personen) sind für die KI standardmäßig gesperrt und lassen sich einzeln freischalten. Das unterstützt die Vorgabe, dass über die KI keine personenbezogenen Daten verarbeitet werden. Die Verantwortung dafür bleibt beim Nutzer.
 - Die Logik für Datenzugriff und Validierung liegt im Kern und wird von Oberfläche und MCP-Server gemeinsam genutzt.
 - Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein.
 - Offen: Welche Tools genau und welche Felder sichtbar sind.
