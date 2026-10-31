@@ -58,7 +58,7 @@ pub struct Page {
     pub more: bool,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct SyncReport {
     pub pulled: usize,
     pub pushed: usize,
@@ -269,12 +269,13 @@ pub fn create_vault(
     Ok((vault, recovery))
 }
 
-/// Richtet einen weiteren Rechner ein: Keyring vom Server holen, lokal ablegen und mit dem Passwort entsperren.
-/// Bei falschem Passwort bleibt der Keyring trotzdem lokal gespeichert, damit man es erneut versuchen kann.
+/// Richtet einen weiteren Rechner ein: Keyring vom Server holen, mit dem Passwort entsperren und erst dann
+/// lokal ablegen. Bei falschem Passwort bleibt lokal nichts zurück, der Nutzer kann es erneut versuchen.
 pub fn join_vault(store: &Store, client: &SyncClient, password: &str) -> Result<Vault> {
     let (keyring, version) = client.get_keyring()?.ok_or(SyncError::NoVault)?;
+    let vault = Vault::unlock_with_password(&keyring, password)?;
     store.set_keyring(&keyring, version)?;
-    Ok(Vault::unlock_with_password(&keyring, password)?)
+    Ok(vault)
 }
 
 /// Gleicht lokalen Stand und Server ab.

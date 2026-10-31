@@ -321,16 +321,18 @@ fn vault_setup_and_join_rules() {
         Err(SyncError::VaultExists)
     ));
 
-    // Falsches Passwort.
+    // Falsches Passwort: es bleibt nichts lokal zurück, ein zweiter Versuch ist möglich.
     let other = Store::open_in_memory().unwrap();
     assert!(matches!(
         sync::join_vault(&other, &server.client(), "falsch"),
         Err(SyncError::Crypto(_))
     ));
+    assert!(other.keyring().unwrap().is_none());
+    assert!(sync::join_vault(&other, &server.client(), PASSWORD).is_ok());
+    assert_eq!(other.keyring().unwrap().unwrap().1, 1);
 
-    // Mit dem Recovery-Key lässt sich der lokal abgelegte Keyring entsperren.
-    let (keyring, version) = other.keyring().unwrap().expect("Keyring bleibt lokal gespeichert");
-    assert_eq!(version, 1);
+    // Mit dem Recovery-Key lässt sich der Keyring vom Server entsperren.
+    let (keyring, _) = server.client().get_keyring().unwrap().unwrap();
     assert!(Vault::unlock_with_recovery(&keyring, &recovery.to_display()).is_ok());
 }
 
@@ -351,4 +353,137 @@ fn unreachable_server_is_a_network_error() {
     };
     let client = SyncClient::new(&format!("http://127.0.0.1:{port}"), TOKEN);
     assert!(matches!(client.pull(0, 10), Err(SyncError::Network(_))));
+}
+
+// ----- Dienstschicht über den echten Server ---------------------------------------------------------
+
+mod service_level {
+    use super::*;
+    use bdb_core::service::{Config, Service, ServiceError};
+    use serde_json::Map;
+
+    fn service(server: &TestServer) -> Service {
+        let dir = std::env::temp_dir().join(format!("bdb-svc-it-{}", random_name()));
+        let mut s = Service::open(&dir, FAST).unwrap();
+        s.set_config(Config { server_url: server.url.clone(), token: TOKEN.into(), attachments_dir: String::new() })
+            .unwrap();
+        s
+    }
+
+    fn fields(value: serde_json::Value) -> Map<String, serde_json::Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn two_services_share_data_through_the_server() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        let mut b = service(&server);
+
+        // B kann nicht beitreten, solange es noch keinen Tresor gibt.
+        assert!(matches!(b.join_vault(PASSWORD), Err(ServiceError::NoVault)));
+
+        a.create_vault(PASSWORD).unwrap();
+        assert!(matches!(b.create_vault(PASSWORD), Err(ServiceError::VaultExists)));
+        assert!(matches!(b.join_vault("falsches passwort"), Err(ServiceError::WrongSecret)));
+        b.join_vault(PASSWORD).unwrap();
+
+        let schule = a.save("schule", None, &fields(json!({"name": "Grundschule am See", "ort": "Ulm"}))).unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        assert_eq!(b.get(&schule).unwrap().fields["name"], "Grundschule am See");
+
+        // B legt einen Ansprechpartner mit Verweis auf die Schule an, A holt ihn.
+        let person = b.save("ansprechpartner", None, &fields(json!({"name": "Frau Weber", "schule": schule}))).unwrap();
+        b.sync().unwrap();
+        a.sync().unwrap();
+        assert_eq!(a.get(&person).unwrap().fields["schule"], json!(schule));
+
+        // Löschen kommt ebenfalls an.
+        a.delete(&person).unwrap();
+        a.sync().unwrap();
+        b.sync().unwrap();
+        assert!(b.list("ansprechpartner").unwrap().is_empty());
+    }
+
+    #[test]
+    fn vault_created_offline_is_uploaded_on_first_sync() {
+        let Some(server) = TestServer::start() else { return };
+        let dir = std::env::temp_dir().join(format!("bdb-svc-it-{}", random_name()));
+        let mut a = Service::open(&dir, FAST).unwrap();
+        // Zuerst ohne Server arbeiten.
+        a.create_vault(PASSWORD).unwrap();
+        let id = a.save("schule", None, &fields(json!({"name": "Offline entstanden"}))).unwrap();
+        assert!(matches!(a.sync(), Err(ServiceError::NotConfigured)));
+
+        // Dann Server eintragen und abgleichen: Keyring und Daten gehen hoch.
+        a.set_config(Config { server_url: server.url.clone(), token: TOKEN.into(), attachments_dir: String::new() })
+            .unwrap();
+        a.sync().unwrap();
+
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+        b.sync().unwrap();
+        assert_eq!(b.get(&id).unwrap().fields["name"], "Offline entstanden");
+    }
+
+    #[test]
+    fn offline_vault_does_not_overwrite_a_different_vault_on_the_server() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("bdb-svc-it-{}", random_name()));
+        let mut other = Service::open(&dir, FAST).unwrap();
+        other.create_vault("ein ganz anderes passwort").unwrap();
+        other
+            .set_config(Config { server_url: server.url.clone(), token: TOKEN.into(), attachments_dir: String::new() })
+            .unwrap();
+        assert!(matches!(other.sync(), Err(ServiceError::OtherVaultOnServer)));
+
+        // Der Tresor von A ist unverändert.
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+    }
+
+    #[test]
+    fn password_change_reaches_other_devices() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let id = a.save("schule", None, &fields(json!({"name": "A"}))).unwrap();
+        a.sync().unwrap();
+
+        a.change_password(PASSWORD, "ein neues langes passwort").unwrap();
+
+        let mut b = service(&server);
+        assert!(matches!(b.join_vault(PASSWORD), Err(ServiceError::WrongSecret)));
+        let mut b = service(&server);
+        b.join_vault("ein neues langes passwort").unwrap();
+        b.sync().unwrap();
+        assert_eq!(b.get(&id).unwrap().fields["name"], "A");
+    }
+
+    #[test]
+    fn network_errors_do_not_lose_data() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let id = a.save("schule", None, &fields(json!({"name": "Bleibt erhalten"}))).unwrap();
+
+        // Server unerreichbar: Abgleich schlägt fehl, die lokalen Daten bleiben.
+        a.set_config(Config { server_url: "http://127.0.0.1:1".into(), token: TOKEN.into(), attachments_dir: String::new() })
+            .unwrap();
+        assert!(matches!(a.sync(), Err(ServiceError::Sync(SyncError::Network(_)))));
+        assert_eq!(a.get(&id).unwrap().fields["name"], "Bleibt erhalten");
+
+        // Server wieder da: alles geht hoch.
+        a.set_config(Config { server_url: server.url.clone(), token: TOKEN.into(), attachments_dir: String::new() })
+            .unwrap();
+        a.sync().unwrap();
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+        b.sync().unwrap();
+        assert_eq!(b.get(&id).unwrap().fields["name"], "Bleibt erhalten");
+    }
 }
