@@ -24,6 +24,7 @@
 //! | `stammdaten_get` | | `{id, fields, smtp_password_set}` |
 //! | `stammdaten_save` | `{fields}` | |
 //! | `smtp_password_set` | `{password}` (leer löscht) | |
+//! | `import_django` | `{db, media}` (Pfade des alten Tools) | Bericht |
 //! | `reise_antrag` | `{id}` | `{path}` |
 //! | `reise_abrechnung` | `{id}` | `{path}` |
 //! | `reise_r002` | `{id}` | `{path}` |
@@ -170,6 +171,13 @@ struct AttachmentArgs {
     data: String,
     #[serde(default)]
     beilegen: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportArgs {
+    db: String,
+    media: String,
 }
 
 #[derive(Deserialize)]
@@ -453,6 +461,10 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
             let a: Password = parse(args)?;
             service.set_smtp_password(&a.password)?;
             Ok(Value::Null)
+        }
+        "import_django" => {
+            let a: ImportArgs = parse(args)?;
+            to_value(service.import_django(std::path::Path::new(a.db.trim()), std::path::Path::new(a.media.trim()))?)
         }
         "reise_antrag" => {
             let a: IdArgs = parse(args)?;

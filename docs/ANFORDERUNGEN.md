@@ -81,14 +81,14 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 ## Stand der Umsetzung
 
-- **V1:** Fundament (Krypto, lokale Datenbank, Sync, Tauri-App, lokaler MCP-Server), Schulen und Ansprechpartner mit Graph, Beratungen, Protokolle, Auftragsbuch und Dienstreisemodul sind umgesetzt und getestet. Die Daten des alten Django-Tools werden nicht übernommen, es gibt noch keinen Import.
+- **V1:** Fundament (Krypto, lokale Datenbank, Sync, Tauri-App, lokaler MCP-Server), Schulen und Ansprechpartner mit Graph, Beratungen, Protokolle, Auftragsbuch und Dienstreisemodul sind umgesetzt und getestet. Der Import der Daten des alten Django-Tools ist vorhanden (an Testdaten des alten Tools geprüft, noch nicht an der echten Datenbank).
 - **V2:** Fortbildungsmodul mit Prozess und Checklisten, Tätigkeitsbericht, Fahrkartenpreis als Vorschlag und R002 (Grunddaten) sind umgesetzt. Teilnahmebescheinigungen erzeugt und versendet die App nicht, sie stehen als Aufgabe in der Checkliste der Nachbereitung.
 - **V3:** Android ist nicht begonnen.
 
 ## Offene Punkte
 
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen: Die App kompiliert, die Oberfläche ist aber nur im Browser (Chromium) gegen den Kern geprüft, nicht in der Tauri-Hülle selbst.
-- Übernahme der Reisen aus der Datenbank des alten Django-Tools, danach kann `dienstreisebuster/` entfallen.
+- Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen, danach kann `dienstreisebuster/` entfallen.
 - SMTP-Passwort im Schlüsselbund des Betriebssystems ablegen (zurzeit Datei mit Rechten 0600).
 - Tests der TLS-Verbindung zum Mailserver, der Preiserkennung an echten Fahrkarten und des R002 mit der Behörde.
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

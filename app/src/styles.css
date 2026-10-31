@@ -240,3 +240,7 @@ div.inline select { width: auto; }
 }
 
 .suggestions { list-style: none; padding: 0; margin: 0.4rem 0; display: grid; gap: 0.3rem; }
+
+.import { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.2rem; }
+.import-report { margin-top: 0.6rem; }
+.import-report ul { margin: 0.2rem 0; padding-left: 1.2rem; }

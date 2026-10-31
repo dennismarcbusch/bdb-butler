@@ -1180,6 +1180,40 @@ async function main() {
       await page.getByRole('navigation', { name: 'Bereiche' }).waitFor();
     });
 
+    await step('Import aus dem alten Dienstreisebuster', async () => {
+      const old = join(repo, 'core', 'tests', 'fixtures', 'django');
+      await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
+      const form = page.getByRole('form', { name: 'Import aus dem alten Dienstreisebuster' });
+      const importButton = form.getByRole('button', { name: 'Importieren' });
+      assert.equal(await importButton.isDisabled(), true, 'ohne Pfade gesperrt');
+      await form.getByLabel(/Datenbank des alten Tools/).fill(join(old, 'db.sqlite3'));
+      await form.getByLabel(/Ordner mit den Dateien/).fill(join(old, 'media'));
+      await importButton.click();
+      const report = form.getByTestId('import-report');
+      // Die Stammdaten sind schon ausgefüllt und bleiben unverändert, die beiden Reisen kommen dazu.
+      await report.getByText(/Stammdaten: übersprungen\. Reisen: 2 importiert, 0 übersprungen\. Anhänge: 2 importiert, 0 übersprungen\. Dateien kopiert: 6/).waitFor();
+      await report.getByText(/Die Stammdaten in der App sind schon ausgefüllt/).waitFor();
+      await shot(page, '26-import');
+
+      // Zweiter Durchlauf: nichts Neues.
+      await importButton.click();
+      await report.getByText(/Reisen: 0 importiert, 2 übersprungen\. Anhänge: 0 importiert, 2 übersprungen/).waitFor();
+
+      // Die importierten Reisen sind da, mit Ortszeit, Status und Dateien.
+      await page.getByRole('navigation').getByRole('button', { name: 'Dienstreisen' }).click();
+      const list = page.getByRole('region', { name: 'Dienstreisen' });
+      await list.locator('li button', { hasText: 'Beratung vor Ort' }).getByText('14.07.2026 · Entwurf').waitFor();
+      await list.locator('li button', { hasText: 'Fortbildung Künstliche Intelligenz' }).getByText('16.11.2026 · Bezahlt').waitFor();
+      await list.getByRole('button', { name: /Fortbildung Künstliche Intelligenz/ }).click();
+      assert.equal(await page.getByLabel('Reiseantritt *').inputValue(), '2026-11-16T06:45', 'Winterzeit: 05:45 UTC sind 06:45');
+      const panel = page.getByRole('region', { name: 'Dokumente der Reise' });
+      await panel.getByTestId('antrag-datei').filter({ hasText: 'antrag-2026-11-16.pdf' }).waitFor();
+      await panel.getByTestId('abrechnung-datei').filter({ hasText: 'abrechnung-2026-11-16.pdf' }).waitFor();
+      await panel.getByText('fibs_form.pdf').waitFor();
+      await panel.getByText('Fahrkarte: ticket.pdf').waitFor();
+      assert.equal(await panel.getByRole('checkbox', { name: /Hotelrechnung: hotel_rechnung\.pdf/ }).isChecked(), false);
+    });
+
     await step('Keine unerwarteten Fehler in der Browser-Konsole', async () => {
       // Die Brücke antwortet auf Fehler mit HTTP 400, die der Test absichtlich auslöst (falsches Passwort,
       // fehlende Pflichtfelder, ungültiger Recovery-Key, falsche Reihenfolge der Reisezeiten, Mailversand mit

@@ -184,7 +184,7 @@ impl Service {
 
     // ----- Dateien ---------------------------------------------------------------------------------------
 
-    fn files_root(&self) -> Result<PathBuf> {
+    pub(crate) fn files_root(&self) -> Result<PathBuf> {
         let dir = self.config.attachments_dir.trim();
         if dir.is_empty() {
             return Err(ServiceError::Settings("Bitte zuerst den Ordner für PDFs und Anhänge in den Einstellungen eintragen.".into()));
@@ -213,7 +213,7 @@ impl Service {
     }
 
     /// Ordner einer Reise relativ zum Ordner für PDFs und Anhänge.
-    fn trip_dir_relative(&mut self, trip: &RecordView) -> String {
+    pub(crate) fn trip_dir_relative(&mut self, trip: &RecordView) -> String {
         let start = text(&trip.fields, "reise_beginn");
         let date = start.get(..10).unwrap_or("ohne-datum");
         let title = slug(text(&trip.fields, "zweck"), 40);
@@ -224,7 +224,7 @@ impl Service {
 
     /// Schreibt eine Datei in den Ordner der Reise. Bei gleichem Namen wird eine Nummer angehängt. Gibt den
     /// Pfad relativ zum Ordner für PDFs und Anhänge zurück.
-    fn write_trip_file(&mut self, trip: &RecordView, file_name: &str, bytes: &[u8]) -> Result<String> {
+    pub(crate) fn write_trip_file(&mut self, trip: &RecordView, file_name: &str, bytes: &[u8]) -> Result<String> {
         let root = self.files_root()?;
         let dir_rel = self.trip_dir_relative(trip);
         let dir = root.join(&dir_rel);
