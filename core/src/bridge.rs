@@ -15,7 +15,8 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::api::{self, App};
 
-const MAX_BODY: u64 = 2 * 1024 * 1024;
+/// PDFs und Anhänge kommen als Base64 in der Anfrage.
+const MAX_BODY: u64 = 40 * 1024 * 1024;
 
 /// Startet die Brücke in einem eigenen Thread. Gibt die tatsächliche Adresse und den Thread zurück.
 pub fn spawn(addr: &str, app: Arc<App>) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {

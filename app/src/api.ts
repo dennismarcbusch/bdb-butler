@@ -1,4 +1,4 @@
-import type { AuditEntry, Config, JsonValue, KindDef, McpState, RecordView, Status, SyncReport } from './types';
+import type { AuditEntry, Config, JsonValue, KindDef, MailDraft, McpState, RecordView, Stammdaten, Status, SyncReport } from './types';
 
 /** Fehler des Kerns mit stabilem Code (zum Beispiel `locked`, `wrong_secret`, `network`). */
 export class BackendError extends Error {
@@ -52,6 +52,36 @@ export async function call<T>(command: string, args?: unknown): Promise<T> {
   return body.data as T;
 }
 
+/** Liest eine ausgewählte Datei als Base64 (ohne Präfix) für den Transport zum Kern. */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(new BackendError('file', 'Die Datei konnte nicht gelesen werden'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Öffnet eine Datei aus dem Ordner für PDFs und Anhänge: in der App im Standardprogramm, im Browser in einem neuen Tab. */
+export async function openFile(path: string): Promise<void> {
+  if (inTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      await invoke('open_file', { path });
+    } catch (e) {
+      throw toError(e);
+    }
+    return;
+  }
+  const { name, data } = await call<{ name: string; data: string }>('file_read', { path });
+  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  const type = name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream';
+  window.open(URL.createObjectURL(new Blob([bytes], { type })), '_blank');
+}
+
 export const api = {
   status: () => call<Status>('status'),
   configGet: () => call<Config>('config_get'),
@@ -72,6 +102,18 @@ export const api = {
     call<{ id: string }>('save', id ? { kind, id, fields } : { kind, fields }),
   delete: (id: string) => call<null>('delete', { id }),
   conflicts: () => call<RecordView[]>('conflicts'),
+  stammdatenGet: () => call<Stammdaten>('stammdaten_get'),
+  stammdatenSave: (fields: Record<string, JsonValue>) => call<null>('stammdaten_save', { fields }),
+  smtpPasswordSet: (password: string) => call<null>('smtp_password_set', { password }),
+  reiseAntrag: (id: string) => call<{ path: string }>('reise_antrag', { id }),
+  reiseAbrechnung: (id: string) => call<{ path: string }>('reise_abrechnung', { id }),
+  reiseFormular: (id: string, name: string, data: string) => call<{ path: string }>('reise_formular', { id, name, data }),
+  reiseGenehmigung: (id: string, name: string, data: string) => call<{ path: string }>('reise_genehmigung', { id, name, data }),
+  anhangAdd: (reise: string, art: string, name: string, data: string) => call<{ id: string }>('anhang_add', { reise, art, name, data }),
+  anhangDelete: (id: string) => call<null>('anhang_delete', { id }),
+  mailDraft: (id: string, kind: 'antrag' | 'abrechnung') => call<MailDraft>('mail_draft', { id, kind }),
+  mailSend: (id: string, kind: 'antrag' | 'abrechnung', subject: string, body: string, attachments: string[]) =>
+    call<null>('mail_send', { id, kind, subject, body, attachments }),
   mcpGet: () => call<McpState>('mcp_get'),
   mcpSet: (enabled: boolean, port: number, write: boolean, allowPersonal: string[]) =>
     call<McpState>('mcp_set', { enabled, port, write, allow_personal: allowPersonal }),

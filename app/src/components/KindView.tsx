@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
 import { dueLabel, dueState, filterOrders, todayIso, type OrderFilter } from '../auftrag';
-import { matches, titleOf } from '../form';
+import { matches, recordMeta, titleOf } from '../form';
 import type { KindDef, RecordView } from '../types';
 import { RecordForm } from './RecordForm';
 import { RelatedList } from './RelatedList';
+import { TripPanel } from './TripPanel';
 
 interface Props {
   kind: KindDef;
@@ -29,10 +30,12 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
   const [selected, setSelected] = useState<string | 'new' | null>(initialSelected);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState<OrderFilter>('open');
+  const [tripStatus, setTripStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   // Zählt lokale Änderungen, damit „Verknüpfte Einträge“ danach neu lädt (nicht nur nach einem Abgleich).
   const [localChanges, setLocalChanges] = useState(0);
   const isOrders = kind.kind === 'auftrag';
+  const isTrips = kind.kind === 'reise';
   const today = todayIso();
 
   const load = useCallback(async () => {
@@ -48,7 +51,8 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
     void load();
   }, [load, revision]);
 
-  const visible = (isOrders ? filterOrders(records, orderFilter) : records).filter((r) => matches(r, query));
+  const byStatus = isTrips && tripStatus !== '' ? records.filter((r) => r.fields.status === tripStatus) : records;
+  const visible = (isOrders ? filterOrders(byStatus, orderFilter) : byStatus).filter((r) => matches(r, query));
   const current = selected && selected !== 'new' ? (records.find((r) => r.id === selected) ?? null) : null;
 
   return (
@@ -67,6 +71,14 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             ))}
           </div>
         )}
+        {isTrips && (
+          <select aria-label="Status filtern" value={tripStatus} onChange={(e) => setTripStatus(e.currentTarget.value)}>
+            <option value="">Alle Status</option>
+            {['Entwurf', 'Beantragt', 'Genehmigt', 'Abgerechnet', 'Bezahlt'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
         <input type="search" placeholder="Suchen …" aria-label="Suchen" value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
         {error && <p class="error" role="alert">{error}</p>}
         <ul>
@@ -74,6 +86,7 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             <li key={r.id}>
               <button type="button" class={selected === r.id ? 'active' : ''} onClick={() => setSelected(r.id)}>
                 {titleOf(kind, r)}
+                {!isOrders && recordMeta(kind, r) !== '' && <span class="meta">{recordMeta(kind, r)}</span>}
                 {isOrders && (
                   <span class={`meta due-${dueState(r, today)}`}>
                     {dueLabel(r, today)}
@@ -110,6 +123,17 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             onCancel={() => setSelected(null)}
             onNavigate={onNavigate}
             onOrdersChanged={() => {
+              setLocalChanges((n) => n + 1);
+              void load();
+              onChanged();
+            }}
+          />
+        )}
+        {current && isTrips && (
+          <TripPanel
+            trip={current}
+            revision={revision + localChanges}
+            onChanged={() => {
               setLocalChanges((n) => n + 1);
               void load();
               onChanged();

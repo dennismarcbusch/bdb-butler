@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyValues, FormError, matches, splitRecoveryKey, titleOf, toPayload, valuesFromRecord } from './form';
+import { changedFields, emptyValues, FormError, matches, mergeIntoForm, recordMeta, splitRecoveryKey, titleOf, toPayload, valuesFromRecord } from './form';
 import type { KindDef, RecordView } from './types';
 
 const kind: KindDef = {
@@ -54,6 +54,43 @@ describe('Nutzlast für den Kern', () => {
 
   it('lehnt ungültige Zahlen ab', () => {
     expect(() => toPayload(kind, { ...emptyValues(kind), anzahl: 'viele' })).toThrow(FormError);
+  });
+});
+
+describe('Formular und geänderter Eintrag', () => {
+  const initial = { name: 'A', status: 'Entwurf', notizen: '' };
+
+  it('übernimmt Änderungen von außen in Felder, die der Nutzer nicht angefasst hat', () => {
+    const next = { name: 'A', status: 'Genehmigt', notizen: '' };
+    expect(mergeIntoForm(initial, initial, next)).toEqual(next);
+  });
+
+  it('lässt Eingaben des Nutzers stehen', () => {
+    const typed = { name: 'A neu', status: 'Entwurf', notizen: 'Text' };
+    const next = { name: 'A', status: 'Genehmigt', notizen: '' };
+    expect(mergeIntoForm(typed, initial, next)).toEqual({ name: 'A neu', status: 'Genehmigt', notizen: 'Text' });
+  });
+
+  it('erkennt geänderte Felder, auch bei Listen', () => {
+    const base = { a: 'x', liste: ['1', '2'], an: false };
+    expect(changedFields(base, base)).toEqual([]);
+    expect(changedFields({ ...base, liste: ['1'], an: true }, base).sort()).toEqual(['an', 'liste']);
+  });
+});
+
+describe('Vorgabewerte und Zusatzzeile', () => {
+  it('belegt Ja/Nein-Felder mit der Vorgabe vor', () => {
+    const k: KindDef = { ...kind, fields: [{ name: 'beilegen', label: 'Beilegen', type: 'bool', required: false, default: 'true' }, { name: 'x', label: 'X', type: 'bool', required: false }] };
+    expect(emptyValues(k)).toEqual({ beilegen: true, x: false });
+  });
+
+  it('zeigt Datum, Status und Art je nach Typ', () => {
+    const rec = (k: string, fields: RecordView['fields']): [KindDef, RecordView] => [{ ...kind, kind: k }, { id: 'a', kind: k, fields }];
+    expect(recordMeta(...rec('reise', { reise_beginn: '2026-11-16T06:45', status: 'Entwurf' }))).toBe('16.11.2026 · Entwurf');
+    expect(recordMeta(...rec('reise', { status: 'Bezahlt' }))).toBe('Bezahlt');
+    expect(recordMeta(...rec('beratung', { datum: '2026-10-30' }))).toBe('30.10.2026');
+    expect(recordMeta(...rec('protokoll', { datum: '2026-10-30', art: 'Jour fixe' }))).toBe('30.10.2026 · Jour fixe');
+    expect(recordMeta(...rec('schule', { name: 'x' }))).toBe('');
   });
 });
 

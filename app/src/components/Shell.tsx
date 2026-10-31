@@ -90,7 +90,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
       <header>
         <h1>BdB-Butler</h1>
         <nav aria-label="Bereiche">
-          {kinds.map((k) => (
+          {kinds.filter((k) => !k.hidden).map((k) => (
             <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
               {k.label_plural}
               {k.kind === 'auftrag' && overdue > 0 ? ` (${overdue} überfällig)` : ''}

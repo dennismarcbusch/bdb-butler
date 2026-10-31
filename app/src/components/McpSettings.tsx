@@ -17,7 +17,7 @@ export function McpSettings({ kinds }: { kinds: KindDef[] }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const personal = kinds.filter((k) => k.personal);
+  const personal = kinds.filter((k) => k.personal && !k.hidden);
 
   const apply = useCallback((s: McpState) => {
     setState(s);

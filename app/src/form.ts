@@ -7,7 +7,7 @@ export type FormValues = Record<string, FormValue>;
 export function emptyValue(field: FieldDef): FormValue {
   switch (field.type) {
     case 'bool':
-      return false;
+      return field.default === 'true';
     case 'ref_list':
       return [];
     case 'choice':
@@ -40,6 +40,27 @@ export function valuesFromRecord(kind: KindDef, record: RecordView): FormValues 
 
 export class FormError extends Error {}
 
+/**
+ * Übernimmt einen geänderten Eintrag ins Formular, ohne Eingaben des Nutzers zu überschreiben: Felder, die der
+ * Nutzer nicht angefasst hat (Wert gleich dem bisherigen Ausgangswert), folgen dem Eintrag. Geänderte Felder
+ * bleiben. Das braucht das Formular, weil sich Einträge auch von außen ändern (Status nach dem Versenden einer
+ * Mail, Abgleich mit einem anderen Rechner).
+ */
+export function mergeIntoForm(current: FormValues, previousInitial: FormValues, nextInitial: FormValues): FormValues {
+  const merged: FormValues = {};
+  for (const name of new Set([...Object.keys(nextInitial), ...Object.keys(current)])) {
+    const value = current[name];
+    const touched = value !== undefined && JSON.stringify(value) !== JSON.stringify(previousInitial[name]);
+    merged[name] = touched ? value : (nextInitial[name] ?? value ?? '');
+  }
+  return merged;
+}
+
+/** Namen der Felder, deren Wert sich gegenüber dem Ausgangswert geändert hat. */
+export function changedFields(current: FormValues, initial: FormValues): string[] {
+  return Object.keys(current).filter((name) => JSON.stringify(current[name]) !== JSON.stringify(initial[name]));
+}
+
 /** Wandelt Formularwerte in Felder für den Kern. Leere Eingaben werden zu `null` und leeren das Feld. */
 export function toPayload(kind: KindDef, values: FormValues): Record<string, JsonValue> {
   const payload: Record<string, JsonValue> = {};
@@ -70,6 +91,25 @@ export function toPayload(kind: KindDef, values: FormValues): Record<string, Jso
     }
   }
   return payload;
+}
+
+/** Zusatzzeile in Listen: Datum, Status oder Art, je nach Typ. */
+export function recordMeta(kind: KindDef, record: RecordView): string {
+  const text = (name: string) => {
+    const v = record.fields[name];
+    return typeof v === 'string' ? v : '';
+  };
+  const date = (iso: string) => (/^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : '');
+  switch (kind.kind) {
+    case 'reise':
+      return [date(text('reise_beginn')), text('status')].filter(Boolean).join(' · ');
+    case 'beratung':
+      return date(text('datum'));
+    case 'protokoll':
+      return [date(text('datum')), text('art')].filter(Boolean).join(' · ');
+    default:
+      return '';
+  }
 }
 
 export function titleOf(kind: KindDef, record: RecordView): string {

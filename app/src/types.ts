@@ -12,7 +12,7 @@ export type FieldType =
   | { type: 'ref'; kind: string }
   | { type: 'ref_list'; kind: string };
 
-export type FieldDef = FieldType & { name: string; label: string; required: boolean; default?: string };
+export type FieldDef = FieldType & { name: string; label: string; required: boolean; default?: string; internal?: boolean };
 
 export interface KindDef {
   kind: string;
@@ -22,6 +22,8 @@ export interface KindDef {
   sort_field: string;
   sort_desc: boolean;
   personal: boolean;
+  hidden?: boolean;
+  singleton?: boolean;
   fields: FieldDef[];
 }
 
@@ -43,6 +45,29 @@ export interface Config {
   server_url: string;
   token: string;
   attachments_dir: string;
+}
+
+export interface MailDraftAttachment {
+  key: string;
+  name: string;
+  size: number;
+  selected: boolean;
+  required: boolean;
+}
+
+export interface MailDraft {
+  to: string;
+  from: string;
+  subject: string;
+  body: string;
+  attachments: MailDraftAttachment[];
+  already_sent: string | null;
+}
+
+export interface Stammdaten {
+  id: string;
+  fields: Record<string, JsonValue>;
+  smtp_password_set: boolean;
 }
 
 export interface McpState {

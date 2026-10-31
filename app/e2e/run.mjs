@@ -4,13 +4,14 @@
 // Oberfläche mit Playwright (Chromium). Aufruf: `npm run e2e` im Ordner `app/`.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { simpleParser } from 'mailparser';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -91,6 +92,104 @@ async function bridgeCall(port, command, args) {
   assert.ok(body.ok, `${command}: ${JSON.stringify(body.error)}`);
   return body.data;
 }
+
+
+/** Ein kleiner SMTP-Server für den Test: nimmt Mails mit Anmeldung (PLAIN oder LOGIN) an und sammelt sie. */
+function startSmtp({ user, pass }) {
+  const received = [];
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    let state = 'cmd';
+    let from = '';
+    let to = [];
+    let authed = false;
+    let loginStep = 0;
+    let data = [];
+    const send = (line) => socket.write(`${line}\r\n`);
+    const readLine = () => {
+      const i = buffer.indexOf('\r\n');
+      if (i < 0) return null;
+      const line = buffer.subarray(0, i);
+      buffer = buffer.subarray(i + 2);
+      return line;
+    };
+    send('220 fake ESMTP');
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      for (let line = readLine(); line !== null; line = readLine()) {
+        if (state === 'data') {
+          if (line.toString() === '.') {
+            received.push({ from, to, authed, raw: Buffer.concat(data) });
+            data = [];
+            state = 'cmd';
+            send('250 queued');
+          } else {
+            data.push(Buffer.concat([line.subarray(0, 2).toString() === '..' ? line.subarray(1) : line, Buffer.from('\r\n')]));
+          }
+          continue;
+        }
+        const text = line.toString();
+        const upper = text.toUpperCase();
+        if (state === 'login-user') {
+          state = 'login-pass';
+          loginStep = Buffer.from(text, 'base64').toString() === user ? 1 : 0;
+          send('334 UGFzc3dvcmQ6');
+        } else if (state === 'login-pass') {
+          state = 'cmd';
+          authed = loginStep === 1 && Buffer.from(text, 'base64').toString() === pass;
+          send(authed ? '235 ok' : '535 5.7.8 credentials invalid');
+        } else if (upper.startsWith('EHLO') || upper.startsWith('HELO')) {
+          socket.write('250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n');
+        } else if (upper.startsWith('AUTH PLAIN')) {
+          const encoded = text.split(' ')[2] ?? '';
+          const [, u, p] = Buffer.from(encoded, 'base64').toString('latin1').split('\0');
+          authed = u === user && p === pass;
+          send(authed ? '235 ok' : '535 5.7.8 credentials invalid');
+        } else if (upper.startsWith('AUTH LOGIN')) {
+          state = 'login-user';
+          send('334 VXNlcm5hbWU6');
+        } else if (upper.startsWith('MAIL FROM')) {
+          if (!authed) send('530 authentication required');
+          else {
+            from = text.slice(10).replace(/[<>]/g, '').trim();
+            send('250 ok');
+          }
+        } else if (upper.startsWith('RCPT TO')) {
+          to.push(text.slice(8).replace(/[<>]/g, '').trim());
+          send('250 ok');
+        } else if (upper === 'DATA') {
+          state = 'data';
+          send('354 go');
+        } else if (upper === 'QUIT') {
+          send('221 bye');
+          socket.end();
+        } else {
+          send('250 ok');
+        }
+      }
+    });
+    socket.on('error', () => {});
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ port: server.address().port, received, close: () => server.close() })));
+}
+
+/** Wartet, bis eine Bedingung zutrifft (Auswahllisten laden nach dem Öffnen eines Formulars asynchron). */
+async function until(check, what, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  let last;
+  while (Date.now() < deadline) {
+    try {
+      last = await check();
+      if (last) return last;
+    } catch (e) {
+      last = e;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`Zeitüberschreitung: ${what} (zuletzt: ${String(last)})`);
+}
+
+const selectedText = (locator) => locator.evaluate((el) => el.selectedOptions[0]?.textContent ?? '');
 
 const results = [];
 async function step(name, fn) {
@@ -506,7 +605,8 @@ async function main() {
       await page.getByLabel('Datum *').fill('2026-11-05');
       await page.getByRole('button', { name: 'Speichern' }).click();
       await page.getByRole('heading', { name: 'Neuere Beratung' }).waitFor();
-      const titles = await page.getByRole('region', { name: 'Beratungen' }).locator('li button').allInnerTexts();
+      // Jeder Eintrag hat eine Zusatzzeile mit dem Datum, verglichen wird der Titel in der ersten Zeile.
+      const titles = (await page.getByRole('region', { name: 'Beratungen' }).locator('li button').allInnerTexts()).map((t) => t.split('\n')[0]);
       assert.deepEqual(titles, ['Neuere Beratung', 'Tablet-Einsatz im Unterricht'], 'neueste Beratung zuerst');
       // Ungültiges Datum wird abgelehnt.
       await page.getByRole('button', { name: 'Beratung anlegen' }).click();
@@ -643,8 +743,8 @@ async function main() {
       await page.getByRole('heading', { name: 'Rückmeldung an die Schule schicken' }).waitFor();
       assert.equal(await page.getByLabel('Status *').inputValue(), 'Offen');
       assert.equal(await page.getByLabel('Erteilt am').inputValue(), '2026-10-30');
-      assert.equal(await page.getByLabel('Aus Protokoll').evaluate((el) => el.selectedOptions[0].textContent), 'Beratung Tablets');
-      assert.equal(await page.getByLabel('Schule', { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), 'Grundschule am See');
+      await until(async () => (await selectedText(page.getByLabel('Aus Protokoll'))) === 'Beratung Tablets', 'Auftrag verweist auf das Protokoll');
+      await until(async () => (await selectedText(page.getByLabel('Schule', { exact: true }))) === 'Grundschule am See', 'Auftrag übernimmt die Schule');
       await shot(page, '17-auftrag-aus-protokoll');
 
       // Auftrag aus markiertem Text.
@@ -703,6 +803,182 @@ async function main() {
       assert.equal((await bridgeCall(bridgeA, 'get', { id })).fields.text, other);
     });
 
+    await step('Dienstreise: Stammdaten, Antrag, Mail, Abrechnung, Anhänge, Status', async () => {
+      const smtp = await startSmtp({ user: 'max', pass: 'geheim' });
+      const filesDir = tempDir('bdb-e2e-files-');
+      const fixtures = join(repo, 'core', 'tests', 'fixtures');
+      const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: false }).first().click();
+
+      // Ordner für PDFs und Anhänge eintragen.
+      await nav('Einstellungen');
+      await page.getByLabel('Ordner für PDFs und Anhänge').fill(filesDir);
+      await page.getByRole('button', { name: 'Speichern', exact: true }).first().click();
+      await page.getByText('Gespeichert.').first().waitFor();
+
+      // Stammdaten mit Unterschrift und (zunächst falschem) Mail-Passwort.
+      const st = page.getByRole('form', { name: 'Stammdaten' });
+      const fill = async (label, value) => st.getByLabel(label, { exact: true }).fill(value);
+      await fill('Name', 'Mustermann');
+      await fill('Vorname', 'Max');
+      await fill('PLZ', '89073');
+      await fill('Ort', 'Ulm');
+      await fill('Straße', 'Hauptstraße 1');
+      await fill('Beschäftigungsbehörde (Kurzname)', 'Musterschule Ulm');
+      await fill('Personalnummer (VIVA)', '9876543');
+      await fill('IBAN', 'DE89 3704 0044 0532 0130 00');
+      await fill('BIC', 'COBADEFFXXX');
+      await fill('Ort für Unterschrift', 'Ulm');
+      await fill('Empfänger Dienstreiseantrag (Verwaltung)', 'verwaltung@example.org');
+      await fill('Empfänger Abrechnung (LfF)', 'lff@example.org');
+      await fill('Absenderadresse', 'max.mustermann@example.org');
+      await fill('SMTP-Server', '127.0.0.1');
+      await fill('SMTP-Port', String(smtp.port));
+      await fill('SMTP-Benutzer', 'max');
+      await st.getByLabel('Verschlüsselung', { exact: true }).selectOption('keine');
+      await st.getByLabel('SMTP-Passwort').fill('falsches-passwort');
+      await st.locator('#svg-upload').setInputFiles(join(fixtures, 'unterschrift.svg'));
+      await st.getByAltText('Vorschau der Unterschrift').waitFor();
+      await st.getByRole('button', { name: 'Stammdaten speichern' }).click();
+      await st.getByText('Gespeichert.').waitFor();
+      await shot(page, '18-stammdaten');
+
+      // Reise anlegen: falsche Reihenfolge der Zeiten wird abgelehnt.
+      await nav('Dienstreisen');
+      await page.getByRole('button', { name: 'Dienstreise anlegen' }).click();
+      await page.getByLabel('Zweck / Titel *').fill('Beratung Medienkonzept');
+      await page.getByLabel('Geschäftsort *').fill('Dillingen a. d. Donau');
+      await page.getByLabel('Reiseantritt *').fill('2026-11-16T06:45');
+      await page.getByLabel('Beginn Dienstgeschäft *').fill('2026-11-16T10:00');
+      await page.getByLabel('Ende Dienstgeschäft *').fill('2026-11-16T08:00');
+      await page.getByLabel('Beendigung der Reise *').fill('2026-11-17T18:20');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('alert').filter({ hasText: 'darf nicht nach' }).waitFor();
+      await page.getByLabel('Ende Dienstgeschäft *').fill('2026-11-17T15:30');
+      await page.getByLabel('Deutsche Bahn').check();
+      await page.getByLabel('BahnCard vorhanden').check();
+      await page.getByLabel('Fahrkartenpreis (€)').fill('123,45');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Beratung Medienkonzept' }).waitFor();
+      const list = page.getByRole('region', { name: 'Dienstreisen' });
+      await list.locator('li button', { hasText: '16.11.2026 · Entwurf' }).waitFor();
+
+      // Antrag erzeugen.
+      const panel = page.getByRole('region', { name: 'Dokumente der Reise' });
+      await panel.getByRole('button', { name: 'Antrag erzeugen' }).click();
+      await panel.getByText('Antrag erzeugt.').waitFor();
+      await panel.getByTestId('antrag-datei').filter({ hasText: 'antrag-2026-11-16.pdf' }).waitFor();
+      const tripId = (await bridgeCall(bridgeA, 'list', { kind: 'reise' }))[0].id;
+      const readPdf = async (path) => Buffer.from((await bridgeCall(bridgeA, 'file_read', { path })).data, 'base64');
+      const trip = await bridgeCall(bridgeA, 'get', { id: tripId });
+      const antragPdf = await readPdf(trip.fields.antrag_pdf);
+      assert.equal(antragPdf.subarray(0, 4).toString(), '%PDF');
+      const antragText = antragPdf.toString('latin1');
+      for (const wanted of ['(Mustermann)', '(Beratung Medienkonzept)', '(16.11.2026)', '(06:45)']) {
+        assert.ok(antragText.includes(wanted), `Antrag enthält ${wanted}`);
+      }
+      assert.ok(antragText.includes(' cm\n') && /\d+ \d+ c\n/.test(antragText), 'Unterschrift wurde auf die Seite gezeichnet');
+
+      // Mail mit falschem Passwort scheitert und ändert nichts.
+      await panel.getByRole('button', { name: 'Antrag per Mail senden …' }).click();
+      const mail = page.getByRole('region', { name: 'Mail', exact: true });
+      await mail.getByTestId('mail-to').filter({ hasText: 'verwaltung@example.org' }).waitFor();
+      assert.equal(await mail.getByTestId('mail-from').innerText(), 'max.mustermann@example.org');
+      assert.equal(await mail.getByLabel('Betreff').inputValue(), 'Antrag auf Genehmigung einer Dienstreise am 16.11.2026 bis 17.11.2026');
+      await shot(page, '19-mail');
+      await mail.getByRole('button', { name: 'Senden' }).click();
+      await mail.getByRole('alert').filter({ hasText: 'Versand fehlgeschlagen' }).waitFor();
+      assert.equal(smtp.received.length, 0);
+      await mail.getByRole('button', { name: 'Abbrechen' }).click();
+      await list.locator('li button', { hasText: 'Entwurf' }).waitFor();
+
+      // Passwort korrigieren, dann senden.
+      await nav('Einstellungen');
+      await st.getByLabel('SMTP-Passwort').fill('geheim');
+      await st.getByRole('button', { name: 'Stammdaten speichern' }).click();
+      await st.getByText('Gespeichert.').waitFor();
+      await nav('Dienstreisen');
+      await list.getByRole('button', { name: /Beratung Medienkonzept/ }).click();
+      await panel.getByRole('button', { name: 'Antrag per Mail senden …' }).click();
+      await mail.getByRole('button', { name: 'Senden' }).click();
+      await panel.getByText('Antrag gesendet.').waitFor();
+      assert.equal(smtp.received.length, 1);
+      const sent = await simpleParser(smtp.received[0].raw);
+      assert.equal(sent.subject, 'Antrag auf Genehmigung einer Dienstreise am 16.11.2026 bis 17.11.2026');
+      assert.equal(sent.to.value[0].address, 'verwaltung@example.org');
+      assert.equal(sent.attachments.length, 1);
+      assert.equal(sent.attachments[0].filename, 'antrag-2026-11-16.pdf');
+      assert.deepEqual(sent.attachments[0].content, antragPdf, 'die gesendete PDF ist die erzeugte');
+      assert.ok(smtp.received[0].authed);
+      await list.locator('li button', { hasText: '16.11.2026 · Beantragt' }).waitFor();
+
+      // Abrechnung: Formular des Veranstalters, Genehmigung und Anhänge.
+      await panel.getByLabel('Abrechnungsformular des Veranstalters (ausfüllbares PDF)').setInputFiles(join(fixtures, 'fibs_form.pdf'));
+      await panel.getByText('Formular gespeichert.').waitFor();
+      await panel.getByLabel('Genehmigung hinzufügen (PDF)').setInputFiles({ name: 'Genehmigung.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 genehmigt') });
+      await panel.getByText('Genehmigung gespeichert.').waitFor();
+      await list.locator('li button', { hasText: '16.11.2026 · Genehmigt' }).waitFor();
+      // Das Formular folgt dem neuen Status, sonst würde ein späteres Speichern ihn zurückschreiben.
+      await until(async () => (await page.getByLabel('Status *').inputValue()) === 'Genehmigt', 'Formular zeigt Status Genehmigt');
+      await panel.getByLabel('Art', { exact: true }).selectOption('Fahrkarte');
+      await panel.getByLabel('Anhang hinzufügen').setInputFiles({ name: 'ticket.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 ticket') });
+      await panel.getByText('Anhang gespeichert.').waitFor();
+      await panel.getByLabel('Art', { exact: true }).selectOption('Hotelrechnung');
+      await panel.getByLabel('Anhang hinzufügen').setInputFiles({ name: 'hotel.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 hotel') });
+      await panel.getByText('Anhang gespeichert.').waitFor();
+      await panel.getByRole('checkbox', { name: 'Hotelrechnung: hotel.pdf' }).uncheck();
+      await panel.getByRole('button', { name: 'Abrechnung erzeugen' }).click();
+      await panel.getByText('Abrechnung erzeugt.').waitFor();
+      const settled = await bridgeCall(bridgeA, 'get', { id: tripId });
+      const abrechnungText = (await readPdf(settled.fields.abrechnung_pdf)).toString('latin1');
+      for (const wanted of ['(AZ-2026/1234)', '(123,45)', '(DE89)', '(COBADEFFXXX)', '(16.11.2026 06:45)']) {
+        assert.ok(abrechnungText.includes(wanted), `Abrechnung enthält ${wanted}`);
+      }
+
+      await panel.getByRole('button', { name: 'Abrechnung per Mail senden …' }).click();
+      await mail.getByLabel('Betreff').waitFor();
+      assert.equal(await mail.getByRole('checkbox', { name: /Hotelrechnung/ }).isChecked(), false, 'abgewählter Anhang ist nicht vorgewählt');
+      assert.equal(await mail.getByRole('checkbox', { name: /Reisekostenabrechnung/ }).isDisabled(), true, 'die Abrechnung ist immer dabei');
+      await shot(page, '20-mail-abrechnung');
+      await mail.getByRole('button', { name: 'Senden' }).click();
+      await panel.getByText('Abrechnung gesendet.').waitFor();
+      assert.equal(smtp.received.length, 2);
+      const second = await simpleParser(smtp.received[1].raw);
+      assert.equal(second.to.value[0].address, 'lff@example.org');
+      assert.equal(second.subject, 'Reisekostenabrechnung Beratung Medienkonzept (16.11.2026 bis 17.11.2026)');
+      const names = second.attachments.map((a) => a.filename).sort();
+      assert.deepEqual(names.map((n) => n.replace(/-\d{4}-\d{2}-\d{2}/, '')), ['abrechnung.pdf', 'genehmigung-Genehmigung.pdf', 'anhang-ticket.pdf'].sort());
+      await list.locator('li button', { hasText: '16.11.2026 · Abgerechnet' }).waitFor();
+      await until(async () => (await page.getByLabel('Status *').inputValue()) === 'Abgerechnet', 'Formular zeigt Status Abgerechnet');
+      // Speichern ohne eigene Änderung an einem anderen Feld lässt den Status unverändert.
+      await page.getByLabel('Aktenzeichen').fill('AZ-1');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await until(async () => (await bridgeCall(bridgeA, 'get', { id: tripId })).fields.aktenzeichen === 'AZ-1', 'Aktenzeichen gespeichert');
+      assert.equal((await bridgeCall(bridgeA, 'get', { id: tripId })).fields.status, 'Abgerechnet', 'der Status bleibt');
+
+      // Bezahlt eintragen und nach Status filtern.
+      await page.getByLabel('Status *').selectOption('Bezahlt');
+      await page.getByLabel('Bezahlt am').fill('2026-12-01');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await list.locator('li button', { hasText: '16.11.2026 · Bezahlt' }).waitFor();
+      await list.getByLabel('Status filtern').selectOption('Beantragt');
+      await page.getByText('Keine Treffer.').waitFor();
+      await list.getByLabel('Status filtern').selectOption('Bezahlt');
+      await list.locator('li button', { hasText: 'Bezahlt' }).waitFor();
+      await shot(page, '21-reise-bezahlt');
+
+      // Die Dateien liegen im Ordner der Reise, auch das Formular des Veranstalters.
+      const tripDir = join(filesDir, 'Dienstreisen');
+      const [folder] = readdirSync(tripDir);
+      assert.match(folder, /^2026-11-16-beratung-medienkonzept-/);
+      const files = readdirSync(join(tripDir, folder)).sort();
+      assert.deepEqual(
+        files.map((f) => f.replace(/-\d{4}-\d{2}-\d{2}/, '')),
+        ['abrechnung.pdf', 'anhang-hotel.pdf', 'anhang-ticket.pdf', 'antrag.pdf', 'genehmigung-Genehmigung.pdf', 'veranstalter-fibs_form.pdf'],
+      );
+      assert.deepEqual(readFileSync(join(tripDir, folder, 'veranstalter-fibs_form.pdf')), readFileSync(join(fixtures, 'fibs_form.pdf')));
+      smtp.close();
+    });
+
     await step('Einstellungen: Passwort ändern', async () => {
       await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
       await page.getByLabel('Aktuelles Passwort').fill('falsches passwort hier');
@@ -727,12 +1003,13 @@ async function main() {
 
     await step('Keine unerwarteten Fehler in der Browser-Konsole', async () => {
       // Die Brücke antwortet auf Fehler mit HTTP 400, die der Test absichtlich auslöst (falsches Passwort,
-      // fehlende Pflichtfelder, ungültiger Recovery-Key). Der Browser protokolliert sie als Ladefehler.
+      // fehlende Pflichtfelder, ungültiger Recovery-Key, falsche Reihenfolge der Reisezeiten, Mailversand mit
+      // falschem Passwort). Der Browser protokolliert sie als Ladefehler.
       const expected = /^Failed to load resource: the server responded with a status of 400/;
       const unexpected = consoleErrors.filter((m) => !expected.test(m));
       assert.deepEqual(unexpected, [], unexpected.join('\n'));
       const provoked = consoleErrors.length - unexpected.length;
-      assert.equal(provoked, 6, `${provoked} statt 6 erwarteter Fehlerantworten`);
+      assert.equal(provoked, 8, `${provoked} statt 8 erwarteter Fehlerantworten`);
     });
   } finally {
     await browser.close();

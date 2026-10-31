@@ -4,6 +4,7 @@ import { messageOf } from '../errors';
 import type { Config, KindDef } from '../types';
 import type { SyncState } from '../useSync';
 import { McpSettings } from './McpSettings';
+import { StammdatenSettings } from './StammdatenSettings';
 
 interface Props {
   kinds: KindDef[];
@@ -111,6 +112,8 @@ export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: P
           {sync.busy ? 'Gleiche ab …' : 'Jetzt abgleichen'}
         </button>
       </div>
+
+      <StammdatenSettings kinds={kinds} />
 
       <McpSettings kinds={kinds} />
 

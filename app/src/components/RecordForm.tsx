@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useId, useMemo, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
-import { emptyValues, toPayload, titleOf, valuesFromRecord, type FormValue, type FormValues } from '../form';
+import { changedFields, emptyValues, mergeIntoForm, toPayload, titleOf, valuesFromRecord, type FormValue, type FormValues } from '../form';
 import { titleIndex } from '../graph';
 import type { FieldDef, KindDef, RecordView } from '../types';
 import { useProtocolOrders } from '../useProtocolOrders';
@@ -20,13 +20,25 @@ interface Props {
   onOrdersChanged?: () => void;
 }
 
-interface Option {
+export interface Option {
   id: string;
   title: string;
 }
 
 export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, onNavigate, onOrdersChanged }: Props) {
   const [values, setValues] = useState<FormValues>(() => (record ? valuesFromRecord(kind, record) : emptyValues(kind)));
+  // Ausgangswerte aus dem Eintrag. Damit lassen sich Änderungen des Nutzers von Änderungen von außen trennen.
+  const [initial, setInitial] = useState<FormValues>(() => (record ? valuesFromRecord(kind, record) : emptyValues(kind)));
+
+  // Ändert sich der Eintrag von außen (Status nach dem Mailversand, Abgleich), folgen die Felder, die der Nutzer
+  // nicht angefasst hat. Sonst würde ein späteres Speichern den alten Wert zurückschreiben.
+  useEffect(() => {
+    if (!record) return;
+    const next = valuesFromRecord(kind, record);
+    setValues((current) => mergeIntoForm(current, initial, next));
+    setInitial(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record, kind]);
   const [options, setOptions] = useState<Record<string, Option[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -87,8 +99,17 @@ export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, 
     setError(null);
     setBusy(true);
     try {
-      const { id } = await api.save(kind.kind, record?.id ?? null, toPayload(kind, values));
-      onSaved(id);
+      if (record) {
+        // Bestehende Einträge: nur geänderte Felder schreiben, damit Änderungen von außen nicht überschrieben werden.
+        const changed = changedFields(values, initial);
+        const payload = toPayload(kind, values);
+        const partial = Object.fromEntries(Object.entries(payload).filter(([name]) => changed.includes(name)));
+        if (Object.keys(partial).length > 0) await api.save(kind.kind, record.id, partial);
+        onSaved(record.id);
+      } else {
+        const { id } = await api.save(kind.kind, null, toPayload(kind, values));
+        onSaved(id);
+      }
     } catch (e) {
       setError(messageOf(e));
     } finally {
@@ -114,7 +135,7 @@ export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, 
       {kind.personal && (
         <p class="muted">Enthält personenbezogene Daten. Für die KI gesperrt, solange du es nicht freigibst.</p>
       )}
-      {kind.fields.map((field) => (
+      {kind.fields.filter((f) => !f.internal).map((field) => (
         field.type === 'markdown' ? (
           <MarkdownField
             key={field.name}
@@ -181,14 +202,14 @@ function refOptions(field: FieldDef, all: Record<string, Option[]>): Option[] {
   return field.type === 'ref' || field.type === 'ref_list' ? (all[field.kind] ?? []) : [];
 }
 
-interface FieldProps {
+export interface FieldProps {
   field: FieldDef;
   value: FormValue | undefined;
   options: Option[];
   onChange: (value: FormValue) => void;
 }
 
-function Field({ field, value, options, onChange }: FieldProps) {
+export function Field({ field, value, options, onChange }: FieldProps) {
   // Label und Steuerelement sind über `for` und `id` verbunden. Ein umschließendes Label würde bei
   // Auswahlfeldern den Text aller Optionen in den Namen des Feldes aufnehmen.
   const id = useId();

@@ -146,7 +146,7 @@ nav { display: flex; gap: 0.4rem; flex: 1; flex-wrap: wrap; }
 .node { cursor: pointer; }
 .node circle { stroke: var(--panel); stroke-width: 2; }
 .node circle.hit { fill: transparent; stroke: none; }
-.node text { font-size: 13px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.node text { pointer-events: none; font-size: 13px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .node.selected circle:not(.hit), .node:focus-visible circle:not(.hit) { stroke: var(--text); stroke-width: 3.5; }
 .node:focus-visible { outline: none; }
 .node.match circle:not(.hit) { stroke: var(--text); stroke-width: 3; }
@@ -199,3 +199,25 @@ span.wikilink.missing { color: var(--danger); text-decoration: underline dotted;
 .tabs.filter { margin: 0.4rem 0 0.6rem; }
 button.small { padding: 0.1rem 0.5rem; font-size: 0.8rem; margin-left: 0.6rem; }
 button.link.small { border: none; }
+
+.trip { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.4rem; }
+.trip .doc { margin: 0.8rem 0; padding: 0.2rem 0 0.6rem; border-bottom: 1px dashed var(--border); }
+.trip h4, .mail h4 { margin: 0.4rem 0; font-size: 0.95rem; }
+.trip .row { margin-top: 0.4rem; align-items: center; }
+.trip .attachments { list-style: none; padding: 0; margin: 0.3rem 0; display: grid; gap: 0.15rem; }
+.trip .attachments li { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.trip .attachments li label { margin: 0; }
+label.file { display: block; color: var(--muted); font-size: 0.92rem; margin: 0.4rem 0; }
+label.file input { display: block; margin-top: 0.2rem; color: var(--text); }
+div.inline { display: flex; gap: 0.5rem; align-items: center; }
+div.inline label { margin: 0; }
+div.inline select { width: auto; }
+.mail { margin-top: 1rem; padding: 0.8rem 1rem; border: 2px solid var(--accent); border-radius: 8px; background: var(--bg); }
+.mail-header { display: grid; grid-template-columns: 4rem 1fr; gap: 0.2rem 0.6rem; margin: 0.4rem 0; }
+.mail-header dt { color: var(--muted); }
+.mail-header dd { margin: 0; word-break: break-all; }
+.warn { color: var(--warn); }
+.stammdaten { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.2rem; }
+.signature-preview { margin: 0.6rem 0; }
+.signature-preview img { max-width: 20rem; max-height: 6rem; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; display: block; margin-bottom: 0.3rem; }
+.list select { margin: 0.4rem 0 0; }

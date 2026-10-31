@@ -21,6 +21,19 @@
 //! | `save` | `{kind, id?, fields}` | `{id}` |
 //! | `delete` | `{id}` | |
 //! | `conflicts` | | Konflikte |
+//! | `stammdaten_get` | | `{id, fields, smtp_password_set}` |
+//! | `stammdaten_save` | `{fields}` | |
+//! | `smtp_password_set` | `{password}` (leer löscht) | |
+//! | `reise_antrag` | `{id}` | `{path}` |
+//! | `reise_abrechnung` | `{id}` | `{path}` |
+//! | `reise_formular` | `{id, name, data}` (Base64) | `{path}` |
+//! | `reise_genehmigung` | `{id, name, data}` (Base64) | `{path}` |
+//! | `anhang_add` | `{reise, art, name, data, beilegen?}` | `{id}` |
+//! | `anhang_delete` | `{id}` | |
+//! | `file_path` | `{path}` | `{path}` (absolut) |
+//! | `file_read` | `{path}` | `{name, data}` (Base64) |
+//! | `mail_draft` | `{id, kind}` (`antrag` oder `abrechnung`) | Entwurf |
+//! | `mail_send` | `{id, kind, subject, body, attachments}` | |
 //! | `mcp_get` | | Einstellungen des KI-Zugriffs und ob der Server läuft |
 //! | `mcp_set` | `{enabled, port, write, allow_personal}` | wie `mcp_get` |
 //! | `mcp_new_token` | | wie `mcp_get` |
@@ -29,10 +42,12 @@
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Map, Value};
 
 use crate::crypto;
 use crate::mcp::McpServer;
+use crate::reisen::MailKind;
 use crate::service::{Config, Service, ServiceError};
 use crate::sync::SyncError;
 
@@ -120,6 +135,60 @@ struct KindArgs {
 #[serde(deny_unknown_fields)]
 struct IdArgs {
     id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FieldsArgs {
+    fields: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathArgs {
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileArgs {
+    id: String,
+    name: String,
+    /// Dateiinhalt als Base64.
+    data: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttachmentArgs {
+    reise: String,
+    art: String,
+    name: String,
+    data: String,
+    #[serde(default)]
+    beilegen: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MailKindArgs {
+    id: String,
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MailSendArgs {
+    id: String,
+    kind: String,
+    subject: String,
+    body: String,
+    #[serde(default)]
+    attachments: Vec<String>,
+}
+
+fn decode_base64(data: &str) -> Result<Vec<u8>, ApiError> {
+    B64.decode(data.trim()).map_err(|_| ApiError::new("bad_request", "Die Datei ist nicht richtig kodiert"))
 }
 
 #[derive(Deserialize)]
@@ -360,6 +429,65 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
             none()?;
             to_value(service.conflicts()?)
         }
+        "stammdaten_get" => {
+            none()?;
+            let view = service.stammdaten()?;
+            Ok(json!({"id": view.id, "fields": view.fields, "smtp_password_set": service.smtp_password_is_set()}))
+        }
+        "stammdaten_save" => {
+            let a: FieldsArgs = parse(args)?;
+            service.save_stammdaten(&a.fields)?;
+            Ok(Value::Null)
+        }
+        "smtp_password_set" => {
+            let a: Password = parse(args)?;
+            service.set_smtp_password(&a.password)?;
+            Ok(Value::Null)
+        }
+        "reise_antrag" => {
+            let a: IdArgs = parse(args)?;
+            Ok(json!({"path": service.reise_antrag_erzeugen(&a.id)?}))
+        }
+        "reise_abrechnung" => {
+            let a: IdArgs = parse(args)?;
+            Ok(json!({"path": service.reise_abrechnung_erzeugen(&a.id)?}))
+        }
+        "reise_formular" => {
+            let a: FileArgs = parse(args)?;
+            Ok(json!({"path": service.reise_formular_setzen(&a.id, &a.name, &decode_base64(&a.data)?)?}))
+        }
+        "reise_genehmigung" => {
+            let a: FileArgs = parse(args)?;
+            Ok(json!({"path": service.reise_genehmigung_setzen(&a.id, &a.name, &decode_base64(&a.data)?)?}))
+        }
+        "anhang_add" => {
+            let a: AttachmentArgs = parse(args)?;
+            let id = service.anhang_hinzufuegen(&a.reise, &a.art, &a.name, &decode_base64(&a.data)?, a.beilegen)?;
+            Ok(json!({"id": id}))
+        }
+        "anhang_delete" => {
+            let a: IdArgs = parse(args)?;
+            service.anhang_loeschen(&a.id)?;
+            Ok(Value::Null)
+        }
+        "file_path" => {
+            let a: PathArgs = parse(args)?;
+            Ok(json!({"path": service.file_path(&a.path)?}))
+        }
+        "file_read" => {
+            let a: PathArgs = parse(args)?;
+            let (name, bytes) = service.file_read(&a.path)?;
+            Ok(json!({"name": name, "data": B64.encode(bytes)}))
+        }
+        "mail_draft" => {
+            let a: MailKindArgs = parse(args)?;
+            to_value(service.mail_entwurf(&a.id, MailKind::parse(&a.kind)?)?)
+        }
+        "mail_send" => {
+            let a: MailSendArgs = parse(args)?;
+            service.mail_senden(&a.id, MailKind::parse(&a.kind)?, &a.subject, &a.body, &a.attachments)?;
+            Ok(Value::Null)
+        }
         other => Err(ApiError::new("unknown_command", format!("Unbekannter Befehl „{other}“"))),
     }
 }
@@ -560,5 +688,53 @@ mod tests {
         assert_eq!(e.code, "settings");
         assert!(e.message.contains(&port.to_string()));
         assert_eq!(ok(&s, "mcp_get", Value::Null)["running"], false);
+    }
+
+    #[test]
+    fn trip_commands_work_through_json() {
+        let s = service();
+        ok(&s, "create_vault", json!({"password": PASSWORD}));
+        let files = std::env::temp_dir().join(format!("bdb-api-files-{}", std::process::id()));
+        ok(&s, "config_set", json!({"server_url": "", "token": "", "attachments_dir": files.to_string_lossy()}));
+
+        // Stammdaten: erst leer, dann gefüllt; das Passwort ist getrennt.
+        let empty = ok(&s, "stammdaten_get", Value::Null);
+        assert_eq!((empty["fields"].clone(), empty["smtp_password_set"].clone()), (json!({}), json!(false)));
+        let trip = ok(&s, "save", json!({"kind": "reise", "fields": {"zweck": "Beratung", "geschaeftsort": "Ulm",
+            "reise_beginn": "2026-11-16T08:00", "dienstgeschaeft_beginn": "2026-11-16T09:00",
+            "dienstgeschaeft_ende": "2026-11-16T16:00", "reise_ende": "2026-11-16T17:00"}}))["id"].as_str().unwrap().to_string();
+        assert_eq!(err(&s, "reise_antrag", json!({"id": trip})).code, "invalid", "ohne Stammdaten kein Antrag");
+
+        ok(&s, "stammdaten_save", json!({"fields": {"name": "Mustermann", "vorname": "Max", "plz": "89073", "ort": "Ulm",
+            "strasse": "Hauptstraße 1", "dienststelle_kurz": "Schule", "personal_nr": "1"}}));
+        ok(&s, "smtp_password_set", json!({"password": "geheim"}));
+        assert_eq!(ok(&s, "stammdaten_get", Value::Null)["smtp_password_set"], true);
+        assert_eq!(err(&s, "stammdaten_save", json!({"fields": {"unsinn": 1}})).code, "invalid");
+
+        let path = ok(&s, "reise_antrag", json!({"id": trip}))["path"].as_str().unwrap().to_string();
+        assert!(path.ends_with(".pdf"));
+        let read = ok(&s, "file_read", json!({"path": path}));
+        let bytes = B64.decode(read["data"].as_str().unwrap()).unwrap();
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(ok(&s, "file_path", json!({"path": path}))["path"].as_str().unwrap().starts_with(&*files.to_string_lossy()));
+        assert_eq!(err(&s, "file_read", json!({"path": "../x"})).code, "invalid");
+        assert_eq!(err(&s, "file_read", json!({"path": "gibt/es/nicht"})).code, "not_found");
+
+        // Dateien als Base64: falsche Kodierung, kein Formular, Anhang.
+        assert_eq!(err(&s, "reise_formular", json!({"id": trip, "name": "x.pdf", "data": "***"})).code, "bad_request");
+        assert_eq!(err(&s, "reise_formular", json!({"id": trip, "name": "x.pdf", "data": B64.encode(b"kein pdf")})).code, "invalid");
+        let id = ok(&s, "anhang_add", json!({"reise": trip, "art": "Fahrkarte", "name": "ticket.pdf", "data": B64.encode(b"%PDF ticket")}))["id"].as_str().unwrap().to_string();
+        ok(&s, "anhang_delete", json!({"id": id}));
+        assert_eq!(err(&s, "anhang_delete", json!({"id": id})).code, "not_found");
+
+        // Mail: Entwurf braucht das Dokument, Senden ohne Empfänger scheitert verständlich.
+        let draft = ok(&s, "mail_draft", json!({"id": trip, "kind": "antrag"}));
+        assert!(draft["subject"].as_str().unwrap().starts_with("Antrag auf Genehmigung einer Dienstreise am 16.11.2026"));
+        assert_eq!(err(&s, "mail_draft", json!({"id": trip, "kind": "abrechnung"})).code, "invalid");
+        assert_eq!(err(&s, "mail_draft", json!({"id": trip, "kind": "sonst"})).code, "invalid");
+        let e = err(&s, "mail_send", json!({"id": trip, "kind": "antrag", "subject": "x", "body": "y"}));
+        assert_eq!(e.code, "invalid");
+        assert!(e.message.contains("fehlt"), "{}", e.message);
+        std::fs::remove_dir_all(&files).ok();
     }
 }
