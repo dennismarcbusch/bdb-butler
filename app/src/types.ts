@@ -51,6 +51,8 @@ export interface MailDraftAttachment {
   key: string;
   name: string;
   size: number;
+  /** Größe in der Mail (Base64), danach richtet sich `MailDraft.max_bytes`. */
+  encoded_size: number;
   selected: boolean;
   required: boolean;
 }
@@ -62,6 +64,8 @@ export interface MailDraft {
   body: string;
   attachments: MailDraftAttachment[];
   already_sent: string | null;
+  /** Höchstens so groß dürfen die Anhänge in der Mail zusammen sein (Summe von `encoded_size`). */
+  max_bytes: number;
 }
 
 export interface Stammdaten {

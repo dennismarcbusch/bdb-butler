@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::dienstreise::{self, Fields};
-use crate::mail::{self, Mail, MailAttachment, MailError, Security, SmtpSettings, MAX_ATTACHMENT_BYTES};
+use crate::mail::{self, Mail, MailAttachment, MailError, Security, SmtpSettings, MAX_MAIL_BYTES};
 use crate::pdf::{self, PdfError};
 use crate::schema::{self, STAMMDATEN_ID};
 use crate::secrets::SMTP_PASSWORD;
@@ -29,6 +29,8 @@ pub struct DraftAttachment {
     pub key: String,
     pub name: String,
     pub size: usize,
+    /// Größe in der Mail (Base64), danach richtet sich die Grenze [`MailDraft::max_bytes`].
+    pub encoded_size: usize,
     pub selected: bool,
     /// Der Antrag beziehungsweise die Abrechnung selbst ist immer dabei.
     pub required: bool,
@@ -43,6 +45,8 @@ pub struct MailDraft {
     pub attachments: Vec<DraftAttachment>,
     /// Wann dieses Dokument schon einmal gesendet wurde (`JJJJ-MM-TTTHH:MM`).
     pub already_sent: Option<String>,
+    /// Höchstens so groß dürfen die Anhänge in der Mail zusammen sein (Summe von `encoded_size`).
+    pub max_bytes: usize,
 }
 
 /// Welches Dokument gesendet wird.
@@ -496,7 +500,14 @@ impl Service {
             }
             let (name, bytes) = this.file_read(path)?;
             let shown = if label.is_empty() { name } else { format!("{label}: {name}") };
-            out.push((DraftAttachment { key: key.to_string(), name: shown, size: bytes.len(), selected, required }, path.to_string()));
+            out.push((DraftAttachment {
+                    key: key.to_string(),
+                    name: shown,
+                    size: bytes.len(),
+                    encoded_size: mail::encoded_size(bytes.len()),
+                    selected,
+                    required,
+                }, path.to_string()));
             Ok(())
         };
         match kind {
@@ -550,7 +561,7 @@ impl Service {
             MailKind::Abrechnung => "abrechnung_versendet_am",
         };
         let already_sent = Some(text(&trip.fields, sent_field).to_string()).filter(|s| !s.is_empty());
-        Ok(MailDraft { to, from, subject, body, attachments, already_sent })
+        Ok(MailDraft { to, from, subject, body, attachments, already_sent, max_bytes: MAX_MAIL_BYTES })
     }
 
     fn smtp_settings(&self, personal: &Fields) -> Result<SmtpSettings> {
@@ -575,18 +586,16 @@ impl Service {
         mail::check(&smtp, &from, &to).map_err(mail_err)?;
 
         let mut attachments = Vec::new();
-        let mut total = 0usize;
         for (candidate, path) in self.candidates(kind, &trip)? {
             if candidate.required || selected.contains(&candidate.key) {
                 let (name, bytes) = self.file_read(&path)?;
-                total += bytes.len();
                 attachments.push(MailAttachment { name, bytes });
             }
         }
         if attachments.is_empty() {
             return Err(ServiceError::Invalid("Das Dokument wurde noch nicht erzeugt.".into()));
         }
-        if total > MAX_ATTACHMENT_BYTES {
+        if mail::too_large(attachments.iter().map(|a| a.bytes.len())) {
             return Err(mail_err(MailError::TooLarge));
         }
         let subject = subject.trim();

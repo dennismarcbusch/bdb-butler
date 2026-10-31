@@ -8,8 +8,22 @@ use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart, Singl
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 
-/// Alle Anhänge zusammen dürfen höchstens so groß sein (üblicher Grenzwert der Mailserver).
-pub const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
+/// So groß darf die Mail mit allen Anhängen höchstens werden (üblicher Grenzwert der Mailserver). Gemessen wird die
+/// kodierte Größe: Anhänge gehen als Base64 mit Zeilenumbrüchen und werden dadurch etwa ein Drittel größer als die
+/// Dateien (siehe [`encoded_size`]). An Dateien passen damit zusammen etwa 14,6 MB.
+pub const MAX_MAIL_BYTES: usize = 20 * 1024 * 1024;
+
+/// Größe eines Anhangs in der Mail: Base64 mit einem Zeilenumbruch (CRLF) nach je 76 Zeichen, wie es `lettre`
+/// schreibt.
+pub fn encoded_size(raw: usize) -> usize {
+    let base64 = raw.div_ceil(3) * 4;
+    base64 + base64.div_ceil(76) * 2
+}
+
+/// Sind Anhänge dieser Größen (in Byte) zusammen zu groß für eine Mail?
+pub fn too_large(sizes: impl IntoIterator<Item = usize>) -> bool {
+    sizes.into_iter().map(encoded_size).sum::<usize>() > MAX_MAIL_BYTES
+}
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -19,7 +33,7 @@ pub enum MailError {
     Missing(String),
     #[error("Die Adresse „{0}“ ist ungültig.")]
     InvalidAddress(String),
-    #[error("Die Anhänge sind zusammen größer als 20 MB.")]
+    #[error("Die Mail wäre mit den Anhängen größer als 20 MB. Anhänge werden beim Versand etwa ein Drittel größer, die Dateien dürfen zusammen also höchstens etwa 14,6 MB haben.")]
     TooLarge,
     #[error("Versand fehlgeschlagen: {0}")]
     Send(String),
@@ -110,8 +124,7 @@ fn content_type(name: &str) -> ContentType {
 
 /// Baut die Nachricht (ohne zu senden).
 pub fn build(mail: &Mail) -> Result<Message, MailError> {
-    let total: usize = mail.attachments.iter().map(|a| a.bytes.len()).sum();
-    if total > MAX_ATTACHMENT_BYTES {
+    if too_large(mail.attachments.iter().map(|a| a.bytes.len())) {
         return Err(MailError::TooLarge);
     }
     let mut parts = MultiPart::mixed().singlepart(SinglePart::plain(mail.body.clone()));
@@ -241,14 +254,52 @@ mod tests {
         assert!(matches!(send(&base, &mail), Err(MailError::InvalidAddress(_))));
     }
 
+    /// Größte Dateigröße, deren kodierte Größe noch ins Limit passt.
+    fn largest_raw_size() -> usize {
+        let mut raw = MAX_MAIL_BYTES * 3 / 4;
+        while encoded_size(raw + 1) <= MAX_MAIL_BYTES {
+            raw += 1;
+        }
+        while encoded_size(raw) > MAX_MAIL_BYTES {
+            raw -= 1;
+        }
+        raw
+    }
+
     #[test]
-    fn rejects_attachments_over_the_limit() {
-        let big = MailAttachment { name: "gross.pdf".into(), bytes: vec![0; MAX_ATTACHMENT_BYTES / 2 + 1] };
-        let mail = mail_with(vec![big.clone(), big]);
-        assert!(matches!(build(&mail), Err(MailError::TooLarge)));
-        // Genau am Limit ist erlaubt.
-        let exact = mail_with(vec![MailAttachment { name: "a.pdf".into(), bytes: vec![0; MAX_ATTACHMENT_BYTES] }]);
-        assert!(build(&exact).is_ok());
+    fn limit_counts_the_encoded_size() {
+        // Rund 14,6 MB an Dateien ergeben eine Mail von 20 MB.
+        let raw = largest_raw_size();
+        assert!((15_250_000..15_400_000).contains(&raw), "{raw}");
+        assert!(!too_large([raw]) && too_large([raw + 3]));
+        // 19 MB an Dateien waren früher erlaubt, ergeben aber eine Mail von über 25 MB.
+        assert!(too_large([19 * 1024 * 1024]));
+        let over = mail_with(vec![MailAttachment { name: "gross.pdf".into(), bytes: vec![0; raw + 3] }]);
+        assert!(matches!(build(&over), Err(MailError::TooLarge)));
+        let split = mail_with(vec![
+            MailAttachment { name: "a.pdf".into(), bytes: vec![0; raw / 2 + 3] },
+            MailAttachment { name: "b.pdf".into(), bytes: vec![0; raw / 2 + 3] },
+        ]);
+        assert!(matches!(build(&split), Err(MailError::TooLarge)));
+    }
+
+    #[test]
+    fn encoded_size_matches_the_built_message() {
+        // Binärdaten wie in PDFs: `lettre` wählt dafür Base64 (für Text wählt es eine kürzere Kodierung, die Grenze
+        // ist dann nur vorsichtiger).
+        let size_of = |n: usize| {
+            let bytes = (0..n).map(|i| 0x80 | (i * 7) as u8).collect();
+            build(&mail_with(vec![MailAttachment { name: "a.pdf".into(), bytes }])).unwrap().formatted().len()
+        };
+        let empty = size_of(0);
+        for n in [57, 1000, 123_456] {
+            let grown = size_of(n) - empty;
+            let expected = encoded_size(n);
+            assert!(grown.abs_diff(expected) <= 4, "{n}: Mail wächst um {grown}, erwartet {expected}");
+        }
+        // Eine Mail genau am Limit bleibt (bis auf Kopfzeilen und Text) unter 20 MB.
+        let at_limit = mail_with(vec![MailAttachment { name: "a.pdf".into(), bytes: vec![0; largest_raw_size()] }]);
+        assert!(build(&at_limit).unwrap().formatted().len() <= MAX_MAIL_BYTES + 4096);
     }
 
     #[test]

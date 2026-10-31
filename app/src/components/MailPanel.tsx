@@ -11,9 +11,6 @@ interface Props {
   onSent: () => void;
 }
 
-/** Alle Anhänge zusammen dürfen höchstens so groß sein (wie im Kern). */
-const MAX_BYTES = 20 * 1024 * 1024;
-
 function megabytes(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(2).replace('.', ',');
 }
@@ -50,7 +47,9 @@ export function MailPanel({ tripId, kind, onClose, onSent }: Props) {
 
   const chosen = draft.attachments.filter((a) => a.required || selected.includes(a.key));
   const total = chosen.reduce((sum, a) => sum + a.size, 0);
-  const tooLarge = total > MAX_BYTES;
+  // Die Grenze gilt für die Mail: Anhänge werden dort als Base64 etwa ein Drittel größer (Werte vom Kern).
+  const encoded = chosen.reduce((sum, a) => sum + a.encoded_size, 0);
+  const tooLarge = encoded > draft.max_bytes;
   const title = kind === 'antrag' ? 'Antrag an die Verwaltung senden' : 'Abrechnung an das LfF senden';
 
   async function send() {
@@ -102,7 +101,8 @@ export function MailPanel({ tripId, kind, onClose, onSent }: Props) {
           </label>
         ))}
         <p class={tooLarge ? 'error' : 'muted'} role="status">
-          Zusammen {megabytes(total)} MB{tooLarge ? '. Das ist mehr als die erlaubten 20 MB. Bitte Anhänge abwählen.' : '.'}
+          Zusammen {megabytes(total)} MB, in der Mail {megabytes(encoded)} MB
+          {tooLarge ? ` (erlaubt sind ${megabytes(draft.max_bytes)} MB). Bitte Anhänge abwählen.` : '.'}
         </p>
       </fieldset>
       {error && <p class="error" role="alert">{error}</p>}
