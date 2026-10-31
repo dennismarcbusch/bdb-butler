@@ -354,10 +354,13 @@ fn run_tool(service: &mut Service, config: &McpConfig, name: &str, args: &Value,
         }
         "search" => {
             let a: SearchArgs = parse(args)?;
-            let mut hits: Vec<RecordView> = Vec::new();
-            for def in schema::kinds().into_iter().filter(|d| config.kind_allowed(d)) {
-                hits.extend(service.list(def.kind).map_err(service_error)?.into_iter().filter(|r| text_matches(r, &a.query)));
-            }
+            let kinds: Vec<&str> = schema::kinds().into_iter().filter(|d| config.kind_allowed(d)).map(|d| d.kind).collect();
+            let mut hits: Vec<RecordView> = service
+                .list_many(&kinds)
+                .map_err(service_error)?
+                .into_iter()
+                .filter(|r| text_matches(r, &a.query))
+                .collect();
             let total = hits.len();
             hits.truncate(MAX_RESULTS);
             Ok(json!({"records": hits.iter().map(record_json).collect::<Vec<_>>(), "total": total}))

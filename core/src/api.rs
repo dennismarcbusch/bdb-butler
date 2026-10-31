@@ -370,6 +370,14 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
     if let Some(result) = call_mcp(app, command, args) {
         return result;
     }
+    if command == "sync" {
+        // Ohne die Sperre über die ganze Dauer: Andere Befehle und der KI-Zugriff laufen während der Anfragen an den
+        // Server weiter (siehe `Service::sync_shared`).
+        if !(args.is_null() || args.as_object().is_some_and(Map::is_empty)) {
+            return Err(ApiError::new("bad_request", "Dieser Befehl hat keine Argumente"));
+        }
+        return to_value(Service::sync_shared(&app.service)?);
+    }
     let mut service = app
         .service
         .lock()
@@ -425,10 +433,6 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
             let a: ChangePassword = parse(args)?;
             service.change_password(&a.old_password, &a.new_password)?;
             Ok(Value::Null)
-        }
-        "sync" => {
-            none()?;
-            to_value(service.sync()?)
         }
         "kinds" => {
             none()?;
@@ -743,6 +747,35 @@ mod tests {
         }
         let file = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
         assert!(!file.contains(token.as_str().unwrap()), "Das Token steht nicht in mcp.json");
+    }
+
+    #[test]
+    fn other_commands_run_while_sync_waits_for_the_server() {
+        // Ein Server, der Verbindungen annimmt, aber nie antwortet.
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", silent.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for conn in silent.incoming().flatten() {
+                held.push(conn);
+            }
+        });
+
+        let s = std::sync::Arc::new(service());
+        ok(&s, "create_vault", json!({"password": PASSWORD}));
+        ok(&s, "config_set", json!({"server_url": url, "token": "t", "attachments_dir": ""}));
+        let background = std::sync::Arc::clone(&s);
+        std::thread::spawn(move || {
+            let _ = call(&background, "sync", &Value::Null);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Der Abgleich hängt am Server, die App antwortet trotzdem sofort.
+        let started = std::time::Instant::now();
+        ok(&s, "save", json!({"kind": "schule", "fields": {"name": "Während des Abgleichs"}}));
+        assert_eq!(ok(&s, "list", json!({"kind": "schule"})).as_array().unwrap().len(), 1);
+        ok(&s, "lock", Value::Null);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     #[test]

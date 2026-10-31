@@ -36,6 +36,8 @@ pub enum SyncError {
     KeyringChanged,
     #[error("Der Eintrag {0} lässt sich nach mehreren Versuchen nicht synchronisieren")]
     TooManyConflicts(String),
+    #[error("Die App wurde während des Abgleichs gesperrt")]
+    Locked,
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -280,19 +282,45 @@ pub fn join_vault(store: &Store, client: &SyncClient, password: &str) -> Result<
     Ok(vault)
 }
 
+/// Zugriff auf die lokale Datenbank während eines Abgleichs. Jeder Aufruf von [`Local::with`] ist ein kurzer
+/// Abschnitt ohne Netzwerk. Dazwischen laufen die Anfragen an den Server, damit die App (Oberfläche und KI-Zugriff)
+/// nicht auf den Server warten muss. Das Protokoll verträgt Änderungen zwischen zwei Abschnitten: Einspielen führt
+/// mit lokalen Änderungen zusammen, und ein Eintrag, der sich während des Sendens ändert, bleibt vorgemerkt.
+pub trait Local {
+    fn with<R>(&mut self, f: impl FnOnce(&mut Store, &Vault, &mut Clock) -> Result<R>) -> Result<R>;
+}
+
+/// Direkter Zugriff (Tests, Werkzeuge): alles in einem Stück.
+struct Direct<'a> {
+    store: &'a mut Store,
+    vault: &'a Vault,
+    clock: &'a mut Clock,
+}
+
+impl Local for Direct<'_> {
+    fn with<R>(&mut self, f: impl FnOnce(&mut Store, &Vault, &mut Clock) -> Result<R>) -> Result<R> {
+        f(self.store, self.vault, self.clock)
+    }
+}
+
 /// Gleicht lokalen Stand und Server ab.
 pub fn sync(store: &mut Store, vault: &Vault, clock: &mut Clock, client: &SyncClient) -> Result<SyncReport> {
+    sync_with(&mut Direct { store, vault, clock }, client)
+}
+
+/// Wie [`sync`], greift aber über [`Local`] in kurzen Abschnitten auf die Datenbank zu.
+pub fn sync_with(local: &mut impl Local, client: &SyncClient) -> Result<SyncReport> {
     let mut report = SyncReport::default();
 
-    pull_all(store, vault, clock, client, &mut report)?;
+    pull_all(local, client, &mut report)?;
 
     for _ in 0..MAX_ROUNDS {
-        let pending = store.pending()?;
+        let pending = local.with(|store, _, _| Ok(store.pending_ids()?))?;
         if pending.is_empty() {
             return Ok(report);
         }
-        for item in pending {
-            push_entry(store, vault, clock, client, &item.id, &mut report)?;
+        for id in pending {
+            push_entry(local, client, &id, &mut report)?;
         }
     }
     // Neue Konflikteinträge entstehen nur beim Zusammenführen. Bleibt nach mehreren Runden etwas übrig,
@@ -304,30 +332,27 @@ pub fn sync(store: &mut Store, vault: &Vault, clock: &mut Clock, client: &SyncCl
 /// App-Fassung, mit anderem Typ als lokal), hält den Abgleich nicht auf: Er wird übersprungen und gemeldet. Der
 /// gespeicherte Cursor bleibt vor dem ersten übersprungenen Eintrag stehen, damit er beim nächsten Abgleich (zum
 /// Beispiel nach einem Update der App) erneut versucht wird. Alle anderen Einträge werden trotzdem eingespielt.
-fn pull_all(
-    store: &mut Store,
-    vault: &Vault,
-    clock: &mut Clock,
-    client: &SyncClient,
-    report: &mut SyncReport,
-) -> Result<()> {
-    let mut since = store.cursor()?;
+fn pull_all(local: &mut impl Local, client: &SyncClient, report: &mut SyncReport) -> Result<()> {
+    let mut since = local.with(|store, _, _| Ok(store.cursor()?))?;
     let mut keep_before: Option<i64> = None;
     let mut skipped: Vec<String> = Vec::new();
     loop {
         let page = client.pull(since, PAGE_SIZE)?;
-        for entry in &page.entries {
-            match apply(store, vault, clock, entry, report) {
-                Ok(()) => {}
-                Err(SyncError::Store(StoreError::Crypto(_) | StoreError::Record(_))) => {
-                    skipped.push(entry.id.clone());
-                    keep_before.get_or_insert(entry.seq - 1);
+        local.with(|store, vault, clock| {
+            for entry in &page.entries {
+                match apply(store, vault, clock, entry, report) {
+                    Ok(()) => {}
+                    Err(SyncError::Store(StoreError::Crypto(_) | StoreError::Record(_))) => {
+                        skipped.push(entry.id.clone());
+                        keep_before.get_or_insert(entry.seq - 1);
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+                since = since.max(entry.seq);
             }
-            since = since.max(entry.seq);
-        }
-        store.set_cursor(keep_before.unwrap_or(since))?;
+            store.set_cursor(keep_before.unwrap_or(since))?;
+            Ok(())
+        })?;
         if !page.more || page.entries.is_empty() {
             break;
         }
@@ -364,26 +389,19 @@ fn apply(
     Ok(())
 }
 
-fn push_entry(
-    store: &mut Store,
-    vault: &Vault,
-    clock: &mut Clock,
-    client: &SyncClient,
-    id: &str,
-    report: &mut SyncReport,
-) -> Result<()> {
+fn push_entry(local: &mut impl Local, client: &SyncClient, id: &str, report: &mut SyncReport) -> Result<()> {
     for _ in 0..MAX_RETRIES_PER_ENTRY {
-        let Some(item) = store.pending()?.into_iter().find(|p| p.id == id) else {
+        let Some(item) = local.with(|store, _, _| Ok(store.pending_entry(id)?))? else {
             return Ok(());
         };
         match client.push(&item.id, item.base_seq, &item.blob)? {
             PushResult::Accepted { seq } => {
-                store.mark_pushed(&item.id, seq, &item.blob)?;
+                local.with(|store, _, _| Ok(store.mark_pushed(&item.id, seq, &item.blob)?))?;
                 report.pushed += 1;
                 return Ok(());
             }
             PushResult::Conflict { current: Some(current) } => {
-                apply(store, vault, clock, &current, report)?;
+                local.with(|store, vault, clock| apply(store, vault, clock, &current, report))?;
             }
             PushResult::Conflict { current: None } => {
                 return Err(SyncError::Protocol(format!(

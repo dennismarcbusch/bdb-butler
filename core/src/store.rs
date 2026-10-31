@@ -263,6 +263,23 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// IDs der Einträge mit lokalen Änderungen, die noch zum Server müssen (ohne die Blobs zu laden).
+    pub fn pending_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM entries WHERE dirty = 1 ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Die ausstehende Änderung eines Eintrags (`None`, wenn er nichts mehr zu senden hat).
+    pub fn pending_entry(&self, id: &str) -> Result<Option<Pending>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id, seq, blob FROM entries WHERE id = ?1 AND dirty = 1", [id], |r| {
+                Ok(Pending { id: r.get(0)?, base_seq: r.get(1)?, blob: r.get(2)? })
+            })
+            .optional()?)
+    }
+
     /// Der Server hat `blob` unter der Folgenummer `seq` angenommen. Hat sich der Eintrag lokal inzwischen
     /// geändert, bleibt er zum Senden vorgemerkt.
     pub fn mark_pushed(&self, id: &str, seq: i64, blob: &[u8]) -> Result<()> {

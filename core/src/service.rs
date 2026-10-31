@@ -7,6 +7,7 @@
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -153,6 +154,26 @@ pub struct RecordView {
     pub id: String,
     pub kind: String,
     pub fields: Map<String, Value>,
+}
+
+/// Nächster Schritt beim Abgleich des Keyrings (siehe [`Service::keyring_plan`]).
+enum KeyringStep {
+    /// Nichts hochzuladen, gegebenenfalls mit Hinweisen.
+    Done(Vec<String>),
+    /// Diesen Keyring hochladen. `initial`: Es ist der erste Keyring auf dem Server (ein Fehler bricht ab).
+    Upload { keyring: crypto::Keyring, base_version: i64, initial: bool },
+}
+
+/// Zugriff auf die Datenbank eines geteilten Dienstes in kurzen Abschnitten (siehe [`Service::sync_shared`]).
+struct Shared<'a>(&'a Mutex<Service>);
+
+impl sync::Local for Shared<'_> {
+    fn with<R>(&mut self, f: impl FnOnce(&mut Store, &Vault, &mut Clock) -> sync::Result<R>) -> sync::Result<R> {
+        let mut guard = self.0.lock().map_err(|_| SyncError::Protocol("Interner Fehler: Sperre vergiftet".into()))?;
+        let service = &mut *guard;
+        let session = service.session.as_mut().ok_or(SyncError::Locked)?;
+        f(&mut service.store, &session.vault, &mut session.clock)
+    }
 }
 
 pub(crate) struct Session {
@@ -461,16 +482,17 @@ impl Service {
 
     // ----- Abgleich --------------------------------------------------------------------------------------
 
-    /// Gleicht mit dem Server ab. Vorher wird der Keyring abgeglichen (siehe [`Service::sync_keyring`]).
+    /// Gleicht mit dem Server ab. Vorher wird der Keyring abgeglichen (siehe [`Service::keyring_plan`]).
     pub fn sync(&mut self) -> Result<SyncReport> {
-        if !self.is_configured() {
-            return Err(ServiceError::NotConfigured);
-        }
-        if self.session.is_none() {
-            return Err(ServiceError::Locked);
-        }
-        let client = self.client()?;
-        let mut warnings = self.sync_keyring(&client)?;
+        let client = self.sync_client()?;
+        let mut warnings = match self.keyring_plan(client.get_keyring()?)? {
+            KeyringStep::Done(warnings) => warnings,
+            KeyringStep::Upload { keyring, base_version, initial } => {
+                let result = client.put_keyring(base_version, &keyring);
+                self.keyring_uploaded(&keyring, initial, result)?;
+                Vec::new()
+            }
+        };
         let session = self.session.as_mut().ok_or(ServiceError::Locked)?;
         let mut report = sync::sync(&mut self.store, &session.vault, &mut session.clock, &client)?;
         warnings.append(&mut report.warnings);
@@ -478,24 +500,59 @@ impl Service {
         Ok(report)
     }
 
-    /// Abgleich des Keyrings vor dem Abgleich der Einträge:
+    /// Wie [`Service::sync`] für einen geteilten Dienst (App, MCP-Server): Die Sperre gilt nur für die kurzen
+    /// Zugriffe auf die Datenbank, nicht während der Anfragen an den Server. Oberfläche und KI-Zugriff müssen so
+    /// nicht auf einen langsamen oder unerreichbaren Server warten. Wird die App währenddessen gesperrt, bricht der
+    /// Abgleich ab.
+    pub fn sync_shared(service: &Mutex<Service>) -> Result<SyncReport> {
+        let lock = || service.lock().map_err(|_| ServiceError::Settings("Interner Fehler: Sperre vergiftet".into()));
+        let client = lock()?.sync_client()?;
+        let server_keyring = client.get_keyring()?;
+        let step = lock()?.keyring_plan(server_keyring)?;
+        let mut warnings = match step {
+            KeyringStep::Done(warnings) => warnings,
+            KeyringStep::Upload { keyring, base_version, initial } => {
+                let result = client.put_keyring(base_version, &keyring);
+                lock()?.keyring_uploaded(&keyring, initial, result)?;
+                Vec::new()
+            }
+        };
+        let mut report = sync::sync_with(&mut Shared(service), &client).map_err(|e| match e {
+            SyncError::Locked => ServiceError::Locked,
+            other => other.into(),
+        })?;
+        warnings.append(&mut report.warnings);
+        report.warnings = warnings;
+        Ok(report)
+    }
+
+    /// Prüft, ob abgeglichen werden kann, und liefert die Verbindung zum Server.
+    fn sync_client(&self) -> Result<SyncClient> {
+        if !self.is_configured() {
+            return Err(ServiceError::NotConfigured);
+        }
+        if self.session.is_none() {
+            return Err(ServiceError::Locked);
+        }
+        self.client()
+    }
+
+    /// Abgleich des Keyrings vor dem Abgleich der Einträge, ausgehend vom Keyring des Servers:
     ///
     /// - Existiert er noch nicht auf dem Server (Tresor offline angelegt), wird er hochgeladen.
     /// - Hat der Server einen neueren Keyring (zum Beispiel nach einem Passwortwechsel auf einem anderen Rechner),
     ///   übernimmt dieser Rechner ihn, wenn seine Prüfsumme zum Datenschlüssel passt. Danach gilt auch hier nur
-    ///   noch das neue Passwort.
+    ///   noch das neue Passwort. Sonst gibt es einen Hinweis.
     /// - Ein Keyring ohne Prüfsumme (angelegt vor ihrer Einführung) bekommt sie und wird neu hochgeladen.
     ///
-    /// Gibt Hinweise zurück, wenn ein neuerer Keyring nicht geprüft werden konnte.
-    fn sync_keyring(&mut self, client: &SyncClient) -> Result<Vec<String>> {
+    /// Hochladen erledigt der Aufrufer (ohne Sperre) und meldet das Ergebnis an [`Service::keyring_uploaded`].
+    fn keyring_plan(&mut self, server: Option<(crypto::Keyring, i64)>) -> Result<KeyringStep> {
         let vault = &self.session.as_ref().ok_or(ServiceError::Locked)?.vault;
         let (local, version) = self.store.keyring()?.ok_or(ServiceError::NoVault)?;
         let mut warnings = Vec::new();
-        match client.get_keyring()? {
+        match server {
             None if version == 0 => {
-                let sealed = vault.seal_keyring(&local);
-                let new_version = client.put_keyring(0, &sealed)?;
-                self.store.set_keyring(&sealed, new_version)?;
+                return Ok(KeyringStep::Upload { keyring: vault.seal_keyring(&local), base_version: 0, initial: true });
             }
             // Der Server hat seinen Bestand verloren. Die Einträge werden wie bisher erneut gesendet.
             None => {}
@@ -519,17 +576,21 @@ impl Service {
                 }
             }
             Some((server, server_version)) if server_version == version && server == local && !local.is_sealed() => {
-                let sealed = vault.seal_keyring(&local);
-                match client.put_keyring(version, &sealed) {
-                    Ok(new_version) => self.store.set_keyring(&sealed, new_version)?,
-                    // Ein anderer Rechner war schneller. Der nächste Abgleich übernimmt dessen Stand.
-                    Err(SyncError::KeyringChanged) => {}
-                    Err(e) => return Err(e.into()),
-                }
+                return Ok(KeyringStep::Upload { keyring: vault.seal_keyring(&local), base_version: version, initial: false });
             }
             Some(_) => {}
         }
-        Ok(warnings)
+        Ok(KeyringStep::Done(warnings))
+    }
+
+    fn keyring_uploaded(&mut self, keyring: &crypto::Keyring, initial: bool, result: sync::Result<i64>) -> Result<()> {
+        match result {
+            Ok(version) => Ok(self.store.set_keyring(keyring, version)?),
+            // Beim Nachrüsten der Prüfsumme war ein anderer Rechner schneller. Der nächste Abgleich übernimmt dessen
+            // Stand.
+            Err(SyncError::KeyringChanged) if !initial => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     // ----- Einträge --------------------------------------------------------------------------------------
@@ -543,17 +604,31 @@ impl Service {
         schema::kinds()
     }
 
-    /// Alle nicht gelöschten Einträge eines Typs, nach Titel sortiert.
+    /// Alle nicht gelöschten Einträge eines Typs, nach dem Sortierfeld des Typs sortiert.
     pub fn list(&mut self, kind: &str) -> Result<Vec<RecordView>> {
-        let def = schema::kind(kind).ok_or_else(|| ServiceError::UnknownKind(kind.to_string()))?;
+        self.list_many(&[kind])
+    }
+
+    /// Wie [`Service::list`] für mehrere Typen, in der Reihenfolge der Typen. Die Datenbank wird dafür nur einmal
+    /// entschlüsselt (der Typ steht im Chiffretext, eine Abfrage nach Typ gibt es deshalb nicht).
+    pub fn list_many(&mut self, kinds: &[&str]) -> Result<Vec<RecordView>> {
+        let defs = kinds
+            .iter()
+            .map(|kind| schema::kind(kind).ok_or_else(|| ServiceError::UnknownKind(kind.to_string())))
+            .collect::<Result<Vec<_>>>()?;
         let (store, vault, _) = self.unlocked()?;
-        let mut out: Vec<RecordView> = store
-            .list(vault)?
-            .into_iter()
-            .filter(|(_, rec)| rec.kind() == kind && !rec.is_deleted())
-            .map(|(id, rec)| view(id, &rec))
-            .collect();
-        sort_views(&def, &mut out);
+        let mut by_kind: std::collections::HashMap<String, Vec<RecordView>> = std::collections::HashMap::new();
+        for (id, rec) in store.list(vault)? {
+            if !rec.is_deleted() && kinds.contains(&rec.kind()) {
+                by_kind.entry(rec.kind().to_string()).or_default().push(view(id, &rec));
+            }
+        }
+        let mut out = Vec::new();
+        for def in defs {
+            let mut views = by_kind.remove(def.kind).unwrap_or_default();
+            sort_views(&def, &mut views);
+            out.extend(views);
+        }
         Ok(out)
     }
 
