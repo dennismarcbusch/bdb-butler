@@ -1,0 +1,21 @@
+[package]
+name = "bdb-core"
+version = "0.1.0"
+edition = "2021"
+description = "Kern des BdB-Butlers: Krypto, später lokale Datenbank, Sync-Client und MCP-Server"
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+data-encoding = "2"
+getrandom = "0.2"
+hkdf = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+unicode-normalization = "0.1"
+zeroize = "1"
