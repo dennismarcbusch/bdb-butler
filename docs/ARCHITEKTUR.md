@@ -24,7 +24,7 @@ Local-first. Jeder Rechner hält alle Daten in einer lokalen Datenbank. Ein Serv
 |---|---|---|---|
 | `core/` | Rust | Krypto-Kern, Eintragsmodell, lokale Datenbank und Sync-Client; später MCP-Server. Wird von der App eingebunden. | Krypto, Einträge, Datenbank, Sync-Client angelegt und getestet (auch gegen den echten Go-Server) |
 | `server/` | Go | Sync-Server für Chiffretext. | angelegt und getestet |
-| `app/` | TypeScript, Rust (Tauri) | Oberfläche und Tauri-Hülle. | noch nicht angelegt |
+| `app/` | TypeScript (Preact), Rust (Tauri) | Oberfläche und Tauri-Hülle. Die Hülle hat nur einen Befehl `call`, der an `bdb_core::api::call` weiterreicht. | Einrichten, Entsperren, Einstellungen, Listen und Formulare, Konflikte; Hülle kompiliert, Oberfläche im Browser gegen den Kern getestet |
 | `dienstreisebuster/` | Python (Django) | Bestandstool, wird durch das Dienstreisemodul in der App abgelöst. | läuft weiter bis Meilenstein 3 |
 
 Der Kern gehört in Rust, weil der lokale MCP-Server in dem Prozess laufen muss, der den entschlüsselten Datenschlüssel hält. Dieselbe Rust-Bibliothek läuft auch auf Android (Tauri 2). Die Oberfläche in TypeScript ruft den Kern über Tauri-Befehle auf und kennt weder den Schlüssel noch das Dateiformat.
@@ -97,3 +97,12 @@ Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`se
 | PDFs und Anhänge | Ordner, per Nextcloud synchronisiert |
 
 Begründung für das eigene Sync-Protokoll: Es gibt genau einen Nutzer und wenig Daten. Die Schlüsselverwaltung (Master-Passwort und Recovery-Key) ist vorgegeben. Fertige Bausteine bringen eigene Schlüssel- und Servermodelle mit, die dazu nicht passen, und hängen von jungen Bibliotheken ab. Ein Protokoll mit einer Tabelle und drei Endpunkten ist überschaubar, gut zu testen und bleibt unter eigener Kontrolle.
+
+## Oberfläche und Dienstschicht
+
+- Alle Fachlogik liegt im Kern (`core/src/service.rs`): Zustand (eingerichtet, gesperrt, entsperrt), Tresor anlegen, beitreten, entsperren, Einträge anlegen, ändern, löschen, Abgleich. Typen und Felder stehen in `core/src/schema.rs` und gelten für Formulare, Prüfung beim Speichern und später den MCP-Server.
+- `core/src/api.rs` bietet diese Dienste als JSON-Befehle an (`status`, `unlock`, `list`, `save`, `sync` …). Die Tauri-Hülle hat genau einen Befehl `call`, der Befehl und Argumente dorthin weiterreicht. Der MCP-Server wird denselben Einstiegspunkt benutzen.
+- Im Browser (Entwicklung, Tests) ersetzt die HTTP-Brücke `dev_bridge` die Tauri-Hülle. Sie lauscht nur auf localhost, prüft `Host` und `Origin` und ist nicht für den Betrieb gedacht.
+- Die Oberfläche bildet Formulare aus den Typdefinitionen. Neue Typen erscheinen damit ohne Oberflächencode. Besondere Ansichten (Graph, Dienstreise, Fortbildungsprozess) kommen als eigene Komponenten dazu.
+- Das Master-Passwort mindestens 10 Zeichen. Nach 15 Minuten ohne Eingabe sperrt sich die App.
+- Einstellungen dieses Rechners (Server, Token, Ordner für Anhänge) liegen in `settings.json` im Datenordner der App (Zugriffsrechte 0600 unter Linux). Das Token schützt nur den Zugriff auf Chiffretext. Eine Ablage im Schlüsselbund des Betriebssystems ist für die Mail-Zugangsdaten vorgesehen.

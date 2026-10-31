@@ -1,0 +1,16 @@
+[package]
+name = "bdb-app"
+version = "0.1.0"
+edition = "2021"
+description = "BdB-Butler: Tauri-Hülle um den Rust-Kern"
+license = "UNLICENSED"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bdb-core = { path = "../../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }

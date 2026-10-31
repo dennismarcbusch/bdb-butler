@@ -1,0 +1,50 @@
+// Typen der Schnittstelle zum Kern (siehe core/src/api.rs und core/src/schema.rs).
+
+export type FieldType =
+  | { type: 'text' }
+  | { type: 'long_text' }
+  | { type: 'date' }
+  | { type: 'date_time' }
+  | { type: 'number' }
+  | { type: 'bool' }
+  | { type: 'choice'; options: string[] }
+  | { type: 'ref'; kind: string }
+  | { type: 'ref_list'; kind: string };
+
+export type FieldDef = FieldType & { name: string; label: string; required: boolean };
+
+export interface KindDef {
+  kind: string;
+  label: string;
+  label_plural: string;
+  title_field: string;
+  personal: boolean;
+  fields: FieldDef[];
+}
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export interface RecordView {
+  id: string;
+  kind: string;
+  fields: Record<string, JsonValue>;
+}
+
+export interface Status {
+  configured: boolean;
+  has_vault: boolean;
+  unlocked: boolean;
+}
+
+export interface Config {
+  server_url: string;
+  token: string;
+  attachments_dir: string;
+}
+
+export interface SyncReport {
+  pulled: number;
+  pushed: number;
+  merged: number;
+  conflicts: number;
+}
