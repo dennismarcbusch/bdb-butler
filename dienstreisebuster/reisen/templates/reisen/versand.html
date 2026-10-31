@@ -1,0 +1,30 @@
+{% extends "reisen/base.html" %}
+{% block title %}Versand{% endblock %}
+{% block content %}
+<h1>{% if art == "antrag" %}Antrag versenden{% else %}Abrechnung versenden{% endif %}</h1>
+{% if bereits %}<div class="msg error">Diese Mail wurde bereits am {{ bereits|date:"d.m.Y H:i" }} gesendet. Ein erneuter Versand schickt sie nochmals.</div>{% endif %}
+<form method="post">{% csrf_token %}
+  <div class="card">
+    <p style="margin:0 0 4px"><span class="muted">Von:</span> {{ absender|default:"–" }}</p>
+    <p><span class="muted">An:</span> {{ empfaenger|default:"– (in den Einstellungen festlegen)" }}</p>
+    <div class="field"><label for="betreff">Betreff</label><input type="text" id="betreff" name="betreff" value="{{ betreff }}"></div>
+    <div class="field"><label for="text">Text</label><textarea id="text" name="text" rows="9">{{ text }}</textarea></div>
+  </div>
+  <div class="card">
+    <h2>Anhänge</h2>
+    {% for d in dateien %}
+    <div class="field check">
+      <input type="checkbox" id="a{{ forloop.counter }}" name="anhang" value="{{ d.schluessel }}"{% if d.gewaehlt %} checked{% endif %}{% if d.pflicht %} disabled checked{% endif %}>
+      <label for="a{{ forloop.counter }}">{{ d.name }} <span class="muted">({{ d.groesse|filesizeformat }})</span></label>
+    </div>
+    {% endfor %}
+    <p class="{% if zu_gross %}msg error{% else %}muted{% endif %}" style="margin:8px 0 0">Gesamt: {{ summe_mb|floatformat:1 }} MB{% if zu_gross %} – größer als 20 MB, bitte Anhänge abwählen.{% endif %}</p>
+  </div>
+  <div class="row">
+    <button type="submit" name="senden" value="1"{% if zu_gross %} disabled{% endif %}
+      onclick="return confirm('Mail jetzt an {{ empfaenger|escapejs }} senden?')">Jetzt senden</button>
+    <button type="submit" name="aktualisieren" value="1" class="sec">Größe aktualisieren</button>
+    <a class="btn sec" href="{% url 'reisen:detail' reise.pk %}">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}
