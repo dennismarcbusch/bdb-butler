@@ -7,6 +7,9 @@
 //!   Master-Passwort (Argon2id), einmal unter einem Schlüssel aus dem Recovery-Key (HKDF-SHA-256).
 //! - Einträge sind `0x01 || Nonce (24) || Chiffretext || Tag` (XChaCha20-Poly1305). Die Eintrags-ID ist
 //!   als zusätzliche authentifizierte Daten gebunden.
+//! - Der Keyring trägt eine Prüfsumme (HMAC-SHA-256 mit einem Schlüssel aus dem Datenschlüssel). Ein entsperrter
+//!   Rechner erkennt daran, dass ein neuerer Keyring vom Server von jemandem stammt, der den Datenschlüssel kennt,
+//!   und übernimmt ihn (zum Beispiel nach einem Passwortwechsel auf einem anderen Rechner).
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
@@ -15,6 +18,7 @@ use chacha20poly1305::{
 };
 use data_encoding::BASE32_NOPAD;
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
@@ -33,6 +37,7 @@ const AAD_KEYRING_RECOVERY: &[u8] = b"bdbb/keyring/v1/recovery";
 const AAD_ENTRY_PREFIX: &[u8] = b"bdbb/entry/v1/";
 const INFO_ENTRY_KEY: &[u8] = b"bdbb/entry-key/v1";
 const INFO_RECOVERY_KEK: &[u8] = b"bdbb/kek/recovery/v1";
+const INFO_KEYRING_MAC: &[u8] = b"bdbb/keyring-mac/v1";
 
 /// Obergrenzen für Argon2id-Parameter aus einem Keyring. Sie schützen vor einem Keyring, der den
 /// Rechner mit absurden Werten lahmlegen soll. Eine Untergrenze gibt es bewusst nicht: Ein schwächerer
@@ -105,6 +110,26 @@ mod b64 {
     }
 }
 
+/// Wie [`b64`], für ein optionales Feld.
+mod b64_opt {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match bytes {
+            Some(b) => s.serialize_str(&B64.encode(b)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        match Option::<String>::deserialize(d)? {
+            Some(text) => B64.decode(text).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct KdfRecord {
     alg: String,
@@ -124,6 +149,10 @@ pub struct Keyring {
     wrapped_by_password: Vec<u8>,
     #[serde(with = "b64")]
     wrapped_by_recovery: Vec<u8>,
+    /// Prüfsumme über alle anderen Angaben (siehe [`Vault::seal_keyring`]). Fehlt bei Keyrings, die vor ihrer
+    /// Einführung angelegt wurden. Ältere Clients ignorieren das Feld.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "b64_opt")]
+    mac: Option<Vec<u8>>,
 }
 
 impl Keyring {
@@ -141,6 +170,29 @@ impl Keyring {
         }
         keyring.kdf.params.validate()?;
         Ok(keyring)
+    }
+
+    /// Hat der Keyring eine Prüfsumme? (Ältere Keyrings haben keine, siehe [`Vault::seal_keyring`].)
+    pub fn is_sealed(&self) -> bool {
+        self.mac.is_some()
+    }
+
+    /// Alle Angaben außer der Prüfsumme in eindeutiger Form (jedes Teil mit Längenangabe).
+    fn mac_input(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut part = |bytes: &[u8]| {
+            out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            out.extend_from_slice(bytes);
+        };
+        part(&self.version.to_be_bytes());
+        part(self.kdf.alg.as_bytes());
+        part(&self.kdf.params.m_kib.to_be_bytes());
+        part(&self.kdf.params.t.to_be_bytes());
+        part(&self.kdf.params.p.to_be_bytes());
+        part(&self.kdf.salt);
+        part(&self.wrapped_by_password);
+        part(&self.wrapped_by_recovery);
+        out
     }
 }
 
@@ -189,12 +241,35 @@ impl RecoveryKey {
 pub struct Vault {
     data_key: Zeroizing<[u8; KEY_LEN]>,
     entry_key: Zeroizing<[u8; KEY_LEN]>,
+    mac_key: Zeroizing<[u8; KEY_LEN]>,
 }
 
 impl Vault {
     fn from_data_key(data_key: Zeroizing<[u8; KEY_LEN]>) -> Self {
         let entry_key = hkdf_expand(&*data_key, INFO_ENTRY_KEY);
-        Self { data_key, entry_key }
+        let mac_key = hkdf_expand(&*data_key, INFO_KEYRING_MAC);
+        Self { data_key, entry_key, mac_key }
+    }
+
+    fn keyring_mac(&self, keyring: &Keyring) -> Hmac<Sha256> {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&*self.mac_key).expect("HMAC nimmt jede Schlüssellänge");
+        mac.update(&keyring.mac_input());
+        mac
+    }
+
+    /// Versieht den Keyring mit der Prüfsumme dieses Tresors.
+    pub fn seal_keyring(&self, keyring: &Keyring) -> Keyring {
+        let mut sealed = keyring.clone();
+        sealed.mac = Some(self.keyring_mac(keyring).finalize().into_bytes().to_vec());
+        sealed
+    }
+
+    /// Stammt der Keyring von jemandem, der den Datenschlüssel dieses Tresors kennt? Ohne Prüfsumme: nein.
+    pub fn verify_keyring(&self, keyring: &Keyring) -> bool {
+        match &keyring.mac {
+            Some(tag) => self.keyring_mac(keyring).verify_slice(tag).is_ok(),
+            None => false,
+        }
     }
 
     /// Richtet einen neuen Tresor ein. Gibt den entsperrten Tresor, den Keyring (für den Server) und den
@@ -213,8 +288,11 @@ impl Vault {
             kdf,
             wrapped_by_password,
             wrapped_by_recovery,
+            mac: None,
         };
-        Ok((Vault::from_data_key(data_key), keyring, recovery))
+        let vault = Vault::from_data_key(data_key);
+        let keyring = vault.seal_keyring(&keyring);
+        Ok((vault, keyring, recovery))
     }
 
     /// Entsperrt mit dem Master-Passwort.
@@ -222,38 +300,50 @@ impl Vault {
         keyring.kdf.params.validate()?;
         let kek = derive_password_key(password, &keyring.kdf.salt, &keyring.kdf.params)?;
         let data_key = unwrap_key(&kek, &keyring.wrapped_by_password, AAD_KEYRING_PASSWORD)?;
-        Ok(Vault::from_data_key(data_key))
+        Vault::checked(data_key, keyring)
     }
 
     /// Entsperrt mit dem Recovery-Key (so, wie er angezeigt wurde).
     pub fn unlock_with_recovery(keyring: &Keyring, recovery_key: &str) -> Result<Vault> {
         let recovery = RecoveryKey::parse(recovery_key)?;
         let data_key = unwrap_key(&recovery.kek(), &keyring.wrapped_by_recovery, AAD_KEYRING_RECOVERY)?;
-        Ok(Vault::from_data_key(data_key))
+        Vault::checked(data_key, keyring)
+    }
+
+    /// Hat ein Keyring eine Prüfsumme, muss sie zum entpackten Datenschlüssel passen. Sonst sind Teile des Keyrings
+    /// ausgetauscht worden.
+    fn checked(data_key: Zeroizing<[u8; KEY_LEN]>, keyring: &Keyring) -> Result<Vault> {
+        let vault = Vault::from_data_key(data_key);
+        if keyring.mac.is_some() && !vault.verify_keyring(keyring) {
+            return Err(Error::InvalidKeyring);
+        }
+        Ok(vault)
     }
 
     /// Setzt ein neues Master-Passwort (neues Salz). Die Daten bleiben unverändert. Der Recovery-Key
     /// bleibt gültig.
     pub fn change_password(&self, keyring: &Keyring, new_password: &str, params: KdfParams) -> Result<Keyring> {
         let (kdf, wrapped_by_password) = wrap_with_password(&self.data_key, new_password, params)?;
-        Ok(Keyring {
+        Ok(self.seal_keyring(&Keyring {
             version: KEYRING_VERSION,
             kdf,
             wrapped_by_password,
             wrapped_by_recovery: keyring.wrapped_by_recovery.clone(),
-        })
+            mac: None,
+        }))
     }
 
     /// Erzeugt einen neuen Recovery-Key. Der alte wird ungültig, sobald der neue Keyring gespeichert ist.
     pub fn rotate_recovery_key(&self, keyring: &Keyring) -> Result<(Keyring, RecoveryKey)> {
         let recovery = RecoveryKey::generate()?;
         let wrapped_by_recovery = wrap(&recovery.kek(), &self.data_key, AAD_KEYRING_RECOVERY)?;
-        let new_keyring = Keyring {
+        let new_keyring = self.seal_keyring(&Keyring {
             version: KEYRING_VERSION,
             kdf: keyring.kdf.clone(),
             wrapped_by_password: keyring.wrapped_by_password.clone(),
             wrapped_by_recovery,
-        };
+            mac: None,
+        });
         Ok((new_keyring, recovery))
     }
 
@@ -561,6 +651,52 @@ mod tests {
         value["version"] = serde_json::json!(2);
         assert!(matches!(Keyring::from_json(&value.to_string()), Err(Error::UnsupportedVersion)));
         assert!(matches!(Keyring::from_json("kein json"), Err(Error::InvalidKeyring)));
+    }
+
+    #[test]
+    fn keyrings_are_sealed_and_verified() {
+        let (vault, keyring, _) = new_vault();
+        assert!(keyring.is_sealed() && vault.verify_keyring(&keyring));
+
+        // Ein Passwortwechsel auf einem anderen Rechner ergibt einen Keyring, den dieser Rechner prüfen kann.
+        let changed = vault.change_password(&keyring, "neues passwort", FAST).unwrap();
+        assert!(vault.verify_keyring(&changed));
+        let (rotated, _) = vault.rotate_recovery_key(&keyring).unwrap();
+        assert!(vault.verify_keyring(&rotated));
+
+        // Ein fremder Tresor, eine fehlende oder eine falsche Prüfsumme gelten nicht.
+        let (other, other_keyring, _) = new_vault();
+        assert!(!vault.verify_keyring(&other_keyring) && !other.verify_keyring(&keyring));
+        let mut unsealed = keyring.clone();
+        unsealed.mac = None;
+        assert!(!vault.verify_keyring(&unsealed));
+        assert!(vault.verify_keyring(&vault.seal_keyring(&unsealed)));
+    }
+
+    #[test]
+    fn swapped_parts_of_a_sealed_keyring_are_detected() {
+        // Der Server tauscht den Passwortteil gegen den eines eigenen Tresors mit bekanntem Passwort aus.
+        let (_, keyring, recovery) = new_vault();
+        let (_, attacker, _) = Vault::create("passwort des angreifers", FAST).unwrap();
+        let mut forged = keyring.clone();
+        forged.kdf = attacker.kdf.clone();
+        forged.wrapped_by_password = attacker.wrapped_by_password.clone();
+        assert!(matches!(Vault::unlock_with_password(&forged, "passwort des angreifers"), Err(Error::InvalidKeyring)));
+        // Der Recovery-Teil ist echt, die Prüfsumme passt trotzdem nicht mehr.
+        assert!(matches!(Vault::unlock_with_recovery(&forged, &recovery.to_display()), Err(Error::InvalidKeyring)));
+    }
+
+    #[test]
+    fn keyrings_without_mac_still_work() {
+        let (vault, keyring, recovery) = new_vault();
+        let mut old: serde_json::Value = serde_json::from_str(&keyring.to_json()).unwrap();
+        old.as_object_mut().unwrap().remove("mac");
+        let old = Keyring::from_json(&old.to_string()).unwrap();
+        assert!(!old.is_sealed());
+        assert!(Vault::unlock_with_password(&old, "korrekt pferd batterie heftklammer").is_ok());
+        assert!(Vault::unlock_with_recovery(&old, &recovery.to_display()).is_ok());
+        assert!(!old.to_json().contains("mac"));
+        assert!(vault.verify_keyring(&vault.seal_keyring(&old)));
     }
 
     #[test]

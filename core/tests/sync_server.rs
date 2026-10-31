@@ -465,6 +465,49 @@ mod service_level {
     }
 
     #[test]
+    fn password_change_reaches_devices_that_joined_earlier() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        let mut b = service(&server);
+        b.join_vault(PASSWORD).unwrap();
+
+        a.change_password(PASSWORD, "ein neues langes passwort").unwrap();
+        let report = b.sync().unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+        // Auf B gilt danach nur noch das neue Passwort.
+        b.lock();
+        assert!(matches!(b.unlock(PASSWORD), Err(ServiceError::WrongSecret)));
+        b.unlock("ein neues langes passwort").unwrap();
+        // B kann das Passwort seinerseits wieder ändern (früher: dauerhaft 409).
+        b.change_password("ein neues langes passwort", "noch ein anderes passwort").unwrap();
+        a.sync().unwrap();
+        a.lock();
+        a.unlock("noch ein anderes passwort").unwrap();
+    }
+
+    #[test]
+    fn foreign_keyring_from_the_server_is_not_adopted() {
+        let Some(server) = TestServer::start() else { return };
+        let mut a = service(&server);
+        a.create_vault(PASSWORD).unwrap();
+        a.sync().unwrap();
+
+        // Der Server (oder wer sein Token hat) ersetzt den Keyring durch den eines eigenen Tresors.
+        let client = server.client();
+        let (_, version) = client.get_keyring().unwrap().unwrap();
+        let (_, foreign, _) = bdb_core::crypto::Vault::create("passwort des angreifers", FAST).unwrap();
+        client.put_keyring(version, &foreign).unwrap();
+
+        let report = a.sync().unwrap();
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        a.lock();
+        a.unlock(PASSWORD).unwrap();
+        assert!(matches!(a.unlock("passwort des angreifers"), Err(ServiceError::WrongSecret)));
+    }
+
+    #[test]
     fn network_errors_do_not_lose_data() {
         let Some(server) = TestServer::start() else { return };
         let mut a = service(&server);

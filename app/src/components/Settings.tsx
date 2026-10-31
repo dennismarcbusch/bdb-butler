@@ -109,6 +109,9 @@ export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: P
                 ? `Zuletzt abgeglichen um ${sync.lastSync.toLocaleTimeString('de-DE')}.`
                 : 'Noch nicht abgeglichen.'}
         </p>
+        {sync.warnings.map((w) => (
+          <p key={w} class="error" role="alert">{w}</p>
+        ))}
         <button type="button" disabled={!configured || sync.busy} onClick={onSync}>
           {sync.busy ? 'Gleiche ab …' : 'Jetzt abgleichen'}
         </button>

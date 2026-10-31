@@ -122,6 +122,8 @@ export function Shell({ configured, onStatusChanged }: Props) {
                 ? 'Gleiche ab …'
                 : sync.error
                   ? 'Abgleich fehlgeschlagen'
+                  : sync.warnings.length > 0
+                    ? 'Abgleich mit Hinweisen (siehe Einstellungen)'
                   : sync.lastSync
                     ? `Abgeglichen ${sync.lastSync.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`
                     : ''}

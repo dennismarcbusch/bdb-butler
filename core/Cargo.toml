@@ -15,6 +15,7 @@ chrono-tz = "0.10.4"
 data-encoding = "2"
 getrandom = "0.2"
 hkdf = "0.12"
+hmac = "0.12"
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "rustls", "ring", "rustls-native-certs", "hostname"] }
 lopdf = "0.46.0"
 rusqlite = { version = "0.41.1", features = ["bundled"] }

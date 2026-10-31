@@ -106,4 +106,6 @@ export interface SyncReport {
   pushed: number;
   merged: number;
   conflicts: number;
+  /** Hinweise, zum Beispiel zu Einträgen, die sich nicht einspielen ließen. */
+  warnings: string[];
 }

@@ -64,6 +64,8 @@ pub struct SyncReport {
     pub pushed: usize,
     pub merged: usize,
     pub conflicts: usize,
+    /// Hinweise für den Nutzer, zum Beispiel zu Einträgen, die sich nicht einspielen ließen.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Deserialize)]

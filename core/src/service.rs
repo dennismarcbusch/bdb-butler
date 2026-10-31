@@ -386,25 +386,69 @@ impl Service {
 
     // ----- Abgleich --------------------------------------------------------------------------------------
 
-    /// Gleicht mit dem Server ab. Existiert der Keyring noch nicht auf dem Server (Tresor offline angelegt),
-    /// wird er dabei hochgeladen.
+    /// Gleicht mit dem Server ab. Vorher wird der Keyring abgeglichen (siehe [`Service::sync_keyring`]).
     pub fn sync(&mut self) -> Result<SyncReport> {
         let client = self.client()?;
+        let mut warnings = self.sync_keyring(&client)?;
         let session = self.session.as_mut().ok_or(ServiceError::Locked)?;
+        let mut report = sync::sync(&mut self.store, &session.vault, &mut session.clock, &client)?;
+        warnings.append(&mut report.warnings);
+        report.warnings = warnings;
+        Ok(report)
+    }
 
-        if let Some((keyring, 0)) = self.store.keyring()? {
-            match client.get_keyring()? {
-                None => {
-                    let version = client.put_keyring(0, &keyring)?;
-                    self.store.set_keyring(&keyring, version)?;
-                }
-                Some((server_keyring, version)) if server_keyring == keyring => {
-                    self.store.set_keyring(&keyring, version)?;
-                }
-                Some(_) => return Err(ServiceError::OtherVaultOnServer),
+    /// Abgleich des Keyrings vor dem Abgleich der Einträge:
+    ///
+    /// - Existiert er noch nicht auf dem Server (Tresor offline angelegt), wird er hochgeladen.
+    /// - Hat der Server einen neueren Keyring (zum Beispiel nach einem Passwortwechsel auf einem anderen Rechner),
+    ///   übernimmt dieser Rechner ihn, wenn seine Prüfsumme zum Datenschlüssel passt. Danach gilt auch hier nur
+    ///   noch das neue Passwort.
+    /// - Ein Keyring ohne Prüfsumme (angelegt vor ihrer Einführung) bekommt sie und wird neu hochgeladen.
+    ///
+    /// Gibt Hinweise zurück, wenn ein neuerer Keyring nicht geprüft werden konnte.
+    fn sync_keyring(&mut self, client: &SyncClient) -> Result<Vec<String>> {
+        let vault = &self.session.as_ref().ok_or(ServiceError::Locked)?.vault;
+        let (local, version) = self.store.keyring()?.ok_or(ServiceError::NoVault)?;
+        let mut warnings = Vec::new();
+        match client.get_keyring()? {
+            None if version == 0 => {
+                let sealed = vault.seal_keyring(&local);
+                let new_version = client.put_keyring(0, &sealed)?;
+                self.store.set_keyring(&sealed, new_version)?;
             }
+            // Der Server hat seinen Bestand verloren. Die Einträge werden wie bisher erneut gesendet.
+            None => {}
+            Some((server, server_version)) if version == 0 => {
+                if server == local || vault.verify_keyring(&server) {
+                    self.store.set_keyring(&server, server_version)?;
+                } else {
+                    return Err(ServiceError::OtherVaultOnServer);
+                }
+            }
+            Some((server, server_version)) if server_version > version => {
+                if vault.verify_keyring(&server) {
+                    self.store.set_keyring(&server, server_version)?;
+                } else {
+                    warnings.push(
+                        "Auf dem Server liegt ein neuerer Keyring, dessen Prüfsumme nicht zu diesem Tresor passt. Er wurde \
+                         nicht übernommen. Wurde das Master-Passwort auf einem Rechner mit älterer App geändert, dort \
+                         bitte die App aktualisieren und das Passwort erneut setzen."
+                            .to_string(),
+                    );
+                }
+            }
+            Some((server, server_version)) if server_version == version && server == local && !local.is_sealed() => {
+                let sealed = vault.seal_keyring(&local);
+                match client.put_keyring(version, &sealed) {
+                    Ok(new_version) => self.store.set_keyring(&sealed, new_version)?,
+                    // Ein anderer Rechner war schneller. Der nächste Abgleich übernimmt dessen Stand.
+                    Err(SyncError::KeyringChanged) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Some(_) => {}
         }
-        Ok(sync::sync(&mut self.store, &session.vault, &mut session.clock, &client)?)
+        Ok(warnings)
     }
 
     // ----- Einträge --------------------------------------------------------------------------------------
