@@ -31,6 +31,7 @@ export function TripPanel({ trip, revision, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [attachmentKind, setAttachmentKind] = useState('Fahrkarte');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<{ name: string; price: number | null }[] | null>(null);
   const kindId = useId();
   // Häkchen „beilegen“ reagieren sofort, die Speicherung läuft danach. Bei einem Fehler springt das Häkchen zurück.
   const [enclose, setEnclose] = useState<Record<string, boolean>>({});
@@ -138,6 +139,15 @@ export function TripPanel({ trip, revision, onChanged }: Props) {
           {abrechnung && <button type="button" onClick={() => void open(abrechnung)}>Abrechnung öffnen</button>}
           {abrechnung && <button type="button" onClick={() => setMail('abrechnung')}>Abrechnung per Mail senden …</button>}
         </div>
+        <p class="muted">
+          Ohne Formular des Veranstalters: den Erstattungsantrag R002 des LfF mit den Grunddaten vorausfüllen. Tagegeld, Übernachtung,
+          Art der BahnCard und weitere Fahrtkosten bitte im PDF ergänzen. Unterschrift und Prüfung bleiben bei dir.
+        </p>
+        <div class="row">
+          <button type="button" disabled={busy} onClick={() => void run(() => api.reiseR002(trip.id), 'Erstattungsantrag R002 erzeugt.')}>
+            Erstattungsantrag R002 (LfF) vorausfüllen
+          </button>
+        </div>
         {abrechnung && <p class="muted" data-testid="abrechnung-datei">{baseName(abrechnung)}{str(trip, 'abrechnung_versendet_am') ? ` · gesendet ${str(trip, 'abrechnung_versendet_am').replace('T', ' ')}` : ''}</p>}
       </div>
 
@@ -175,6 +185,39 @@ export function TripPanel({ trip, revision, onChanged }: Props) {
             </li>
           ))}
         </ul>
+        <div class="row">
+          <button
+            type="button"
+            disabled={busy || !attachments.some((a) => a.fields.art === 'Fahrkarte')}
+            title={attachments.some((a) => a.fields.art === 'Fahrkarte') ? undefined : 'Zuerst eine Fahrkarte als Anhang hinzufügen'}
+            onClick={() => {
+              setError(null);
+              api.reiseTicketpreis(trip.id).then((r) => setSuggestions(r.candidates), (e) => setError(messageOf(e)));
+            }}
+          >
+            Preis aus Fahrkarten erkennen
+          </button>
+        </div>
+        {suggestions && (
+          <ul class="suggestions" aria-label="Erkannte Preise">
+            {suggestions.map((s) => (
+              <li key={s.name}>
+                {s.name}:{' '}
+                {s.price === null ? (
+                  <span class="muted">kein Preis erkannt</span>
+                ) : (
+                  <>
+                    <strong>{s.price.toFixed(2).replace('.', ',')} €</strong>
+                    <button type="button" class="small" disabled={busy} onClick={() => void run(() => api.save('reise', trip.id, { fahrkartenpreis: s.price }), 'Fahrkartenpreis übernommen.')}>
+                      Als Fahrkartenpreis übernehmen
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+            <li class="muted">Vorschlag aus dem Text der PDF-Datei, bitte prüfen. Bei Bildern oder Scans klappt das nicht.</li>
+          </ul>
+        )}
         <div class="row">
           <div class="inline">
             <label for={kindId}>Art</label>

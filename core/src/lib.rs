@@ -19,6 +19,7 @@ pub mod service;
 #[cfg(test)]
 pub(crate) mod test_smtp;
 pub mod store;
+pub mod ticket;
 pub mod sync;
 
 pub use crypto::{Error, KdfParams, Keyring, RecoveryKey, Vault};

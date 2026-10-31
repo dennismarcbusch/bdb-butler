@@ -61,10 +61,14 @@ pub fn task_counts(markdown: &str) -> (usize, usize) {
 /// sind die Angaben nach der Änderung. Eine Rückwärtsbewegung oder gleiche Phase hat nie Hindernisse.
 pub fn blockers(fields: &Map<String, Value>, from: &str, to: &str) -> Vec<String> {
     let (Some(from_i), Some(to_i)) = (phase_index(from), phase_index(to)) else { return Vec::new() };
+    // Zurück oder gleiche Phase: nie ein Hindernis (und kein gültiger Bereich zum Aufteilen).
+    if to_i <= from_i {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     // Jede verlassene Phase muss ihre Angaben haben.
-    for leaving in from_i..to_i {
-        match PHASES[leaving] {
+    for leaving in &PHASES[from_i..to_i] {
+        match *leaving {
             "Planung" => {
                 let missing: Vec<&str> = PLANNING.iter().filter(|(f, _)| !filled(fields, f)).map(|(_, l)| *l).collect();
                 if !missing.is_empty() {

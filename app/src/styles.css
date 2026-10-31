@@ -238,3 +238,5 @@ div.inline select { width: auto; }
   .content > section, .report-body { border: none; padding: 0; background: #fff; }
   .markdown, .markdown * { color: #000; }
 }
+
+.suggestions { list-style: none; padding: 0; margin: 0.4rem 0; display: grid; gap: 0.3rem; }

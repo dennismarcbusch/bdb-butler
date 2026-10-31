@@ -349,6 +349,17 @@ impl Service {
         self.replace_trip_file(&trip, "abrechnung_pdf", &format!("abrechnung-{start}.pdf"), &bytes)
     }
 
+    /// Erzeugt den Erstattungsantrag R002 (LfF) mit den Grunddaten und legt ihn als Abrechnung ab. Das ist der Weg
+    /// für Reisen ohne vorausgefülltes Formular des Veranstalters. Eine vorhandene Abrechnung wird ersetzt.
+    pub fn reise_r002_erzeugen(&mut self, id: &str) -> Result<String> {
+        let personal = self.require_personal_data()?;
+        let trip = self.trip(id)?;
+        let has_approval = !text(&trip.fields, "genehmigung_pdf").is_empty();
+        let bytes = dienstreise::r002_pdf(&trip.fields, &personal, has_approval).map_err(pdf_err)?;
+        let start = text(&trip.fields, "reise_beginn").get(..10).unwrap_or("").to_string();
+        self.replace_trip_file(&trip, "abrechnung_pdf", &format!("abrechnung-{start}.pdf"), &bytes)
+    }
+
     /// Hinterlegt das vom Veranstalter vorausgefüllte Abrechnungsformular. Es muss ein PDF mit Formularfeldern sein.
     pub fn reise_formular_setzen(&mut self, id: &str, name: &str, bytes: &[u8]) -> Result<String> {
         let trip = self.trip(id)?;
@@ -413,6 +424,28 @@ impl Service {
     fn trip_attachments(&mut self, reise: &str) -> Result<Vec<RecordView>> {
         // Anhänge sind versteckt, `list` liefert sie trotzdem nach Typ.
         Ok(self.list("anhang")?.into_iter().filter(|a| a.fields.get("reise").and_then(Value::as_str) == Some(reise)).collect())
+    }
+
+    // ----- Fahrkarten ------------------------------------------------------------------------------------
+
+    /// Sucht den Preis in den PDFs der Anhänge der Art „Fahrkarte“. Gibt je Datei den Namen und den erkannten Preis
+    /// zurück (`None`, wenn keiner erkannt wurde oder die Datei kein lesbares PDF mit Text ist). Das ist nur ein
+    /// Vorschlag (siehe `ticket`).
+    pub fn reise_ticketpreise(&mut self, id: &str) -> Result<Vec<(String, Option<f64>)>> {
+        self.trip(id)?;
+        let mut out = Vec::new();
+        for attachment in self.trip_attachments(id)? {
+            if text(&attachment.fields, "art") != "Fahrkarte" {
+                continue;
+            }
+            let name = text(&attachment.fields, "name").to_string();
+            let price = match self.file_read(text(&attachment.fields, "datei")) {
+                Ok((_, bytes)) => pdf::extract_text(&bytes).ok().and_then(|t| crate::ticket::detect_price(&t)),
+                Err(_) => None,
+            };
+            out.push((name, price));
+        }
+        Ok(out)
     }
 
     // ----- Mail ------------------------------------------------------------------------------------------
@@ -750,6 +783,47 @@ mod tests {
         let form_path = text(&e.service.get(&id).unwrap().fields, "veranstalter_formular").to_string();
         let (_, original) = e.service.file_read(&form_path).unwrap();
         assert_eq!(original, FORM);
+    }
+
+    #[test]
+    fn ticket_prices_are_suggested_from_ticket_attachments_only() {
+        let mut e = env();
+        let id = new_trip(&mut e.service);
+        assert!(e.service.reise_ticketpreise(&id).unwrap().is_empty(), "ohne Fahrkarte kein Vorschlag");
+        let sample = include_bytes!("../tests/fixtures/ticket_sample.pdf");
+        e.service.anhang_hinzufuegen(&id, "Fahrkarte", "bahnticket.pdf", sample, None).unwrap();
+        e.service.anhang_hinzufuegen(&id, "Fahrkarte", "kaputt.pdf", b"kein pdf", None).unwrap();
+        e.service.anhang_hinzufuegen(&id, "Hotelrechnung", "hotel.pdf", sample, None).unwrap();
+
+        let prices = e.service.reise_ticketpreise(&id).unwrap();
+        assert_eq!(prices.len(), 2, "nur Fahrkarten, nicht die Hotelrechnung");
+        let named = |n: &str| prices.iter().find(|(name, _)| name == n).unwrap().1;
+        assert_eq!(named("bahnticket.pdf"), Some(29.85), "Gesamtpreis, nicht die Teilpreise, den Rabatt oder die Steuer");
+        assert_eq!(named("kaputt.pdf"), None, "ein beschädigtes PDF führt nicht zum Absturz");
+        assert!(matches!(e.service.reise_ticketpreise("gibt-es-nicht"), Err(ServiceError::NotFound)));
+    }
+
+    #[test]
+    fn r002_replaces_the_settlement_and_can_be_mailed() {
+        let mut e = env();
+        let id = new_trip(&mut e.service);
+        e.service.reise_genehmigung_setzen(&id, "g.pdf", b"%PDF g").unwrap();
+        let rel = e.service.reise_r002_erzeugen(&id).unwrap();
+        assert!(rel.ends_with("/abrechnung-2026-11-16.pdf"), "{rel}");
+        let (_, bytes) = e.service.file_read(&rel).unwrap();
+        let values = pdf::read_values(&bytes).unwrap();
+        assert_eq!(values["S1 Name 1"], pdf::FieldValue::text("Mustermann"));
+        assert_eq!(values["S1 Genehmigung"], pdf::FieldValue::State("liegt bei".into()));
+        assert_eq!(values["S2 Betrag3"], pdf::FieldValue::text("123,45"));
+
+        // Es ist die Abrechnung: derselbe Mailweg wie beim Formular des Veranstalters.
+        let draft = e.service.mail_entwurf(&id, MailKind::Abrechnung).unwrap();
+        assert!(draft.attachments[0].name.starts_with("Reisekostenabrechnung: abrechnung-"));
+        e.service.mail_senden(&id, MailKind::Abrechnung, &draft.subject, &draft.body, &[]).unwrap();
+        assert_eq!(e.service.get(&id).unwrap().fields["status"], "Abgerechnet");
+        // Erneut erzeugen ersetzt die Datei.
+        let again = e.service.reise_r002_erzeugen(&id).unwrap();
+        assert_eq!(fs::read_dir(e.files.join(&again).parent().unwrap()).unwrap().filter(|f| f.as_ref().unwrap().file_name().to_string_lossy().starts_with("abrechnung-")).count(), 1);
     }
 
     #[test]

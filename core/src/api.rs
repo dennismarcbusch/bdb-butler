@@ -26,6 +26,8 @@
 //! | `smtp_password_set` | `{password}` (leer löscht) | |
 //! | `reise_antrag` | `{id}` | `{path}` |
 //! | `reise_abrechnung` | `{id}` | `{path}` |
+//! | `reise_r002` | `{id}` | `{path}` |
+//! | `reise_ticketpreis` | `{id}` | `{candidates: [{name, price}]}` |
 //! | `reise_formular` | `{id, name, data}` (Base64) | `{path}` |
 //! | `reise_genehmigung` | `{id, name, data}` (Base64) | `{path}` |
 //! | `anhang_add` | `{reise, art, name, data, beilegen?}` | `{id}` |
@@ -459,6 +461,19 @@ pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
         "reise_abrechnung" => {
             let a: IdArgs = parse(args)?;
             Ok(json!({"path": service.reise_abrechnung_erzeugen(&a.id)?}))
+        }
+        "reise_ticketpreis" => {
+            let a: IdArgs = parse(args)?;
+            let candidates: Vec<Value> = service
+                .reise_ticketpreise(&a.id)?
+                .into_iter()
+                .map(|(name, price)| json!({"name": name, "price": price}))
+                .collect();
+            Ok(json!({ "candidates": candidates }))
+        }
+        "reise_r002" => {
+            let a: IdArgs = parse(args)?;
+            Ok(json!({"path": service.reise_r002_erzeugen(&a.id)?}))
         }
         "reise_formular" => {
             let a: FileArgs = parse(args)?;

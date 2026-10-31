@@ -1078,6 +1078,39 @@ async function main() {
       await shot(page, '23-fortbildung-nachbereitung');
     });
 
+    await step('Dienstreise: Fahrkartenpreis erkennen und Erstattungsantrag R002', async () => {
+      const fixtures = join(repo, 'core', 'tests', 'fixtures');
+      const panel = page.getByRole('region', { name: 'Dokumente der Reise' });
+      await page.getByRole('navigation').getByRole('button', { name: 'Dienstreisen' }).click();
+      await page.getByRole('region', { name: 'Dienstreisen' }).getByRole('button', { name: /Beratung Medienkonzept/ }).click();
+
+      // Fahrkarte als PDF mit Text anhängen. Die frühere „Fahrkarte“ ist kein lesbares PDF.
+      await panel.getByLabel('Art', { exact: true }).selectOption('Fahrkarte');
+      await panel.getByLabel('Anhang hinzufügen').setInputFiles(join(fixtures, 'ticket_sample.pdf'));
+      await panel.getByText('Anhang gespeichert.').waitFor();
+      await panel.getByRole('button', { name: 'Preis aus Fahrkarten erkennen' }).click();
+      const found = panel.getByRole('list', { name: 'Erkannte Preise' });
+      await found.locator('li', { hasText: 'ticket_sample.pdf' }).getByText('29,85 €').waitFor();
+      await found.locator('li', { hasText: 'ticket.pdf' }).getByText('kein Preis erkannt').waitFor();
+      await shot(page, '25-ticketpreis');
+      await found.locator('li', { hasText: 'ticket_sample.pdf' }).getByRole('button', { name: 'Als Fahrkartenpreis übernehmen' }).click();
+      await panel.getByText('Fahrkartenpreis übernommen.').waitFor();
+      const tripId = (await bridgeCall(bridgeA, 'list', { kind: 'reise' }))[0].id;
+      assert.equal((await bridgeCall(bridgeA, 'get', { id: tripId })).fields.fahrkartenpreis, 29.85);
+      // Das Formular zeigt den neuen Preis.
+      await until(async () => (await page.getByLabel('Fahrkartenpreis (€)').inputValue()) === '29.85', 'Formular zeigt den Preis');
+
+      // Erstattungsantrag R002 ohne Veranstalterformular.
+      await panel.getByRole('button', { name: 'Erstattungsantrag R002 (LfF) vorausfüllen' }).click();
+      await panel.getByText('Erstattungsantrag R002 erzeugt.').waitFor();
+      const trip = await bridgeCall(bridgeA, 'get', { id: tripId });
+      const pdf = Buffer.from((await bridgeCall(bridgeA, 'file_read', { path: trip.fields.abrechnung_pdf })).data, 'base64').toString('latin1');
+      for (const wanted of ['(Mustermann)', '(29,85)', '(DE89370400440532013000)', '(Beratung Medienkonzept)', '(16.11.2026)']) {
+        assert.ok(pdf.includes(wanted), `R002 enthält ${wanted}`);
+      }
+      assert.ok(pdf.includes('S1 Name 1'), 'es ist das R002-Formular');
+    });
+
     await step('Tätigkeitsbericht: Zeiträume, Zahlen aus allen Modulen, Speichern', async () => {
       const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: false }).first().click();
       await nav('Tätigkeitsbericht');

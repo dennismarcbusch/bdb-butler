@@ -16,6 +16,9 @@ use crate::pdf::{self, FieldValue, PdfError, Signature};
 /// R001, Stand 04/2019.
 pub const ANTRAG_VORLAGE: &[u8] = include_bytes!("../assets/r001_antrag.pdf");
 
+/// R002, Erstattungsantrag Reisekosten des Landesamts für Finanzen, Stand 04/2025.
+pub const R002_VORLAGE: &[u8] = include_bytes!("../assets/r002_lff.pdf");
+
 pub type Fields = Map<String, Value>;
 pub type Values = BTreeMap<String, FieldValue>;
 
@@ -189,6 +192,79 @@ pub fn abrechnung_values(reise: &Fields, st: &Fields, today: &str) -> Values {
     v
 }
 
+fn place_choice(choice: &str) -> FieldValue {
+    FieldValue::State(
+        match choice {
+            "Wohnort" | "wohnort" => "Wohnort",
+            "Dienststelle" | "dienststelle" => "Dienststelle",
+            "Anderer Ort" | "anderer" => "anderer Ort",
+            _ => "Off",
+        }
+        .to_string(),
+    )
+}
+
+/// Feldwerte für den Erstattungsantrag R002 des LfF (für Reisen ohne vorausgefülltes Formular des Veranstalters).
+///
+/// Befüllt wird nur, was sich eindeutig zuordnen lässt: persönliche Angaben, Bankverbindung, Reisegrund,
+/// Zweck, Orte, Zeiten, Abfahrt und Rückkehr, Genehmigung (wenn eine hinterlegt ist) sowie die Bahn-Fahrkarte mit
+/// Preis. Tagegeld, Übernachtung, Art der BahnCard, Mitfahrer und weitere Verkehrsmittel bleiben leer und sind im
+/// PDF von Hand zu ergänzen.
+pub fn r002_values(reise: &Fields, st: &Fields, has_approval: bool) -> Values {
+    let start = text(reise, "reise_beginn");
+    let end = text(reise, "reise_ende");
+    let fortbildung = matches!(text(reise, "art"), "Fortbildungsreise" | "fortbildung");
+    let street_and_town = [text(st, "strasse").trim().to_string(), format!("{} {}", text(st, "plz"), text(st, "ort")).trim().to_string()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let iban: String = text(st, "iban").split_whitespace().collect();
+
+    let mut v: Values = BTreeMap::new();
+    let mut put = |name: &str, value: FieldValue| {
+        v.insert(name.to_string(), value);
+    };
+    put("S1 Name 1", t(text(st, "name")));
+    put("S1 VorName", t(text(st, "vorname")));
+    put("S1 PersNr", t(text(st, "personal_nr")));
+    put("S1 DienstBez", t(text(st, "besoldungsgruppe")));
+    put("S1 Schulbez", t(text(st, "abteilung")));
+    put("S1 eMail", t(text(st, "email")));
+    put("S1 Anschrift", t(&street_and_town));
+    put("S1 Tel", t(text(st, "telefon")));
+    put("S1 BeschäftgBeh", t(text(st, "dienststelle_kurz")));
+    put("S1 IBAN des Kontoinhabers_bish", t(&iban));
+    put("S1 BIC_bish", t(text(st, "bic")));
+    put("S1 KreditInst", t(text(st, "kreditinstitut")));
+    put("S1 DR", FieldValue::check(!fortbildung, "Dienstreise"));
+    put("S1 FortbBReise", FieldValue::check(fortbildung, "Fortbildungsreise"));
+    put("S1 Genehmigung", FieldValue::State(if has_approval { "liegt bei" } else { "Off" }.to_string()));
+    put("S1 Reisezweck", t(text(reise, "zweck")));
+    put("S1 GeschOrte", t(text(reise, "geschaeftsort")));
+    put("S1 AntrittDat", t(&date_de(start)));
+    put("S1 AntrittUhr", t(&time_de(start)));
+    put("S1 EndeDat", t(&date_de(end)));
+    put("S1 EndeUhr", t(&time_de(end)));
+    put("S1 Abfahrt", place_choice(text(reise, "abfahrt_von")));
+    put("S1 OrtText", t(text(reise, "abfahrt_von_text")));
+    put("S1 Rückreise", place_choice(text(reise, "rueckkehr_nach")));
+    put("S1 ROrtText", t(text(reise, "rueckkehr_nach_text")));
+    if flag(reise, "bahn") {
+        put("S2 Bahn", FieldValue::State("Bahn".to_string()));
+        if let Some(price) = reise.get("fahrkartenpreis").and_then(Value::as_f64) {
+            put("S2 Betrag3", t(&decimal_de(price)));
+        }
+    }
+    v
+}
+
+/// Erzeugt den Erstattungsantrag R002 mit den Grunddaten. Eine Unterschrift setzt die App nicht ein, der
+/// Antrag wird ausgedruckt oder im PDF-Programm unterschrieben.
+pub fn r002_pdf(reise: &Fields, st: &Fields, has_approval: bool) -> Result<Vec<u8>, PdfError> {
+    pdf::fill(R002_VORLAGE, &r002_values(reise, st, has_approval), None)
+}
+
 /// Erzeugt den Dienstreiseantrag (R001) mit Unterschrift. `svg` ist die Unterschrift aus den Stammdaten.
 pub fn antrag_pdf(reise: &Fields, st: &Fields, today: &str, svg: Option<&str>) -> Result<Vec<u8>, PdfError> {
     let values = antrag_values(reise, st, today);
@@ -269,6 +345,8 @@ mod tests {
         for case in cases() {
             let bytes = antrag_pdf(&fields_of(&case["reise"]), &fields_of(&case["stammdaten"]), case["today"].as_str().unwrap(), Some(SIGNATURE)).unwrap();
             std::fs::write(format!("{dir}/rust_antrag_{}.pdf", case["name"].as_str().unwrap()), bytes).unwrap();
+            let r002 = r002_pdf(&fields_of(&case["reise"]), &fields_of(&case["stammdaten"]), true).unwrap();
+            std::fs::write(format!("{dir}/rust_r002_{}.pdf", case["name"].as_str().unwrap()), r002).unwrap();
         }
     }
 
@@ -294,6 +372,55 @@ mod tests {
             let want = expected(&case["abrechnung"]);
             assert_eq!(got, want, "Fall {}", case["name"]);
         }
+    }
+
+    #[test]
+    fn r002_values_cover_the_unambiguous_fields_only() {
+        let case = &cases()[0];
+        let reise = fields_of(&case["reise"]);
+        let st = fields_of(&case["stammdaten"]);
+        let v = r002_values(&reise, &st, true);
+        assert_eq!(v["S1 Name 1"], t("Mustermann"));
+        assert_eq!(v["S1 Anschrift"], t("Hauptstraße 1, 89073 Ulm"));
+        assert_eq!(v["S1 DienstBez"], t("A13"));
+        assert_eq!(v["S1 Schulbez"], t("Fachbereich Digitale Bildung"));
+        assert_eq!(v["S1 IBAN des Kontoinhabers_bish"], t("DE89370400440532013000"), "die IBAN ohne Leerzeichen, wie im Kammfeld");
+        assert_eq!(v["S1 DR"], FieldValue::State("Dienstreise".into()));
+        assert_eq!(v["S1 FortbBReise"], FieldValue::State("Off".into()));
+        assert_eq!(v["S1 Genehmigung"], FieldValue::State("liegt bei".into()));
+        assert_eq!((v["S1 AntrittDat"].clone(), v["S1 AntrittUhr"].clone()), (t("16.11.2026"), t("06:45")));
+        assert_eq!((v["S1 EndeDat"].clone(), v["S1 EndeUhr"].clone()), (t("17.11.2026"), t("18:20")));
+        assert_eq!(v["S1 Abfahrt"], FieldValue::State("Wohnort".into()));
+        assert_eq!(v["S2 Bahn"], FieldValue::State("Bahn".into()));
+        assert_eq!(v["S2 Betrag3"], t("123,45"));
+        // Nichts, was sich nicht sicher zuordnen lässt.
+        for name in ["S2 Bahncard25", "S2 Bahncard50", "S2 Klasse1", "S1 Tag1", "S2 Betrag1", "S2 ÜbernachtDatvon", "S1 SteuerID"] {
+            assert!(!v.contains_key(name), "{name} bleibt leer");
+        }
+
+        // Fortbildungsreise, andere Orte, ohne Genehmigung, ohne Bahn.
+        let other = fields_of(&json!({"art": "Fortbildungsreise", "abfahrt_von": "Anderer Ort", "abfahrt_von_text": "Augsburg", "rueckkehr_nach": "Dienststelle"}));
+        let v = r002_values(&other, &Fields::new(), false);
+        assert_eq!(v["S1 FortbBReise"], FieldValue::State("Fortbildungsreise".into()));
+        assert_eq!(v["S1 DR"], FieldValue::State("Off".into()));
+        assert_eq!(v["S1 Genehmigung"], FieldValue::State("Off".into()));
+        assert_eq!((v["S1 Abfahrt"].clone(), v["S1 OrtText"].clone()), (FieldValue::State("anderer Ort".into()), t("Augsburg")));
+        assert_eq!(v["S1 Rückreise"], FieldValue::State("Dienststelle".into()));
+        assert!(!v.contains_key("S2 Bahn") && !v.contains_key("S2 Betrag3"));
+        assert_eq!(v["S1 Anschrift"], t(""));
+    }
+
+    #[test]
+    fn r002_form_is_filled_and_keeps_all_fields() {
+        let case = &cases()[0];
+        let reise = fields_of(&case["reise"]);
+        let st = fields_of(&case["stammdaten"]);
+        let out = r002_pdf(&reise, &st, false).unwrap();
+        let read = pdf::read_values(&out).unwrap();
+        for (name, want) in r002_values(&reise, &st, false) {
+            assert_eq!(read.get(&name), Some(&want), "Feld {name}");
+        }
+        assert_eq!(pdf::field_names(&out).unwrap().len(), pdf::field_names(R002_VORLAGE).unwrap().len());
     }
 
     #[test]

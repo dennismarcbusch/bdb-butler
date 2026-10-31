@@ -261,6 +261,14 @@ pub fn field_names(template: &[u8]) -> Result<Vec<String>> {
     Ok(all_fields(&doc)?.into_iter().map(|f| f.name).collect())
 }
 
+/// Text des PDFs (alle Seiten). Das klappt nur bei PDFs mit Textinhalt und gängigen Schriften. Bei Bildern oder
+/// ungewöhnlicher Kodierung kommt wenig oder nichts heraus.
+pub fn extract_text(pdf: &[u8]) -> Result<String> {
+    let doc = Document::load_mem(pdf).map_err(|e| PdfError::Read(e.to_string()))?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    doc.extract_text(&pages).map_err(|e| PdfError::Read(e.to_string()))
+}
+
 /// Aktuelle Werte aller Felder: Text als `Text`, Zustände als `State` (ohne Schrägstrich).
 pub fn read_values(template: &[u8]) -> Result<BTreeMap<String, FieldValue>> {
     let doc = Document::load_mem(template).map_err(|e| PdfError::Read(e.to_string()))?;
