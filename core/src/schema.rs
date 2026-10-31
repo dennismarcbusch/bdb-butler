@@ -33,9 +33,14 @@ pub struct FieldDef {
     #[serde(flatten)]
     pub field_type: FieldType,
     pub required: bool,
-    /// Vorgabewert (nur für Auswahlfelder): gilt beim Anlegen, wenn das Feld fehlt.
+    /// Vorgabewert für Auswahlfelder (eine Option) und Ja/Nein-Felder (`true` oder `false`): gilt beim Anlegen,
+    /// wenn das Feld fehlt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<&'static str>,
+    /// Interne Felder (zum Beispiel Dateinamen) zeigt die Oberfläche nicht in Formularen. Sie werden von der
+    /// Anwendung verwaltet.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,39 +56,44 @@ pub struct KindDef {
     pub sort_desc: bool,
     /// Typen mit Personenbezug sind für die KI standardmäßig gesperrt.
     pub personal: bool,
+    /// Versteckte Typen erscheinen weder in der Navigation noch im Graphen und sind für die KI nicht zugänglich.
+    /// Die Anwendung verwaltet sie selbst (Stammdaten, Anhänge).
+    pub hidden: bool,
+    /// Es gibt genau einen Eintrag mit einer festen ID (Stammdaten).
+    pub singleton: bool,
     pub fields: Vec<FieldDef>,
 }
 
 const fn text(name: &'static str, label: &'static str, required: bool) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Text, required, default: None }
+    FieldDef { name, label, field_type: FieldType::Text, required, default: None, internal: false }
 }
 
 const fn long_text(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::LongText, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::LongText, required: false, default: None, internal: false }
 }
 
 const fn markdown(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Markdown, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::Markdown, required: false, default: None, internal: false }
 }
 
 const fn date(name: &'static str, label: &'static str, required: bool) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Date, required, default: None }
+    FieldDef { name, label, field_type: FieldType::Date, required, default: None, internal: false }
 }
 
 const fn number(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Number, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::Number, required: false, default: None, internal: false }
 }
 
 const fn choice(name: &'static str, label: &'static str, options: &'static [&'static str]) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Choice { options }, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::Choice { options }, required: false, default: None, internal: false }
 }
 
 const fn reference(name: &'static str, label: &'static str, kind: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Ref { kind }, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::Ref { kind }, required: false, default: None, internal: false }
 }
 
 const fn reference_list(name: &'static str, label: &'static str, kind: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::RefList { kind }, required: false, default: None }
+    FieldDef { name, label, field_type: FieldType::RefList { kind }, required: false, default: None, internal: false }
 }
 
 const fn required(mut def: FieldDef) -> FieldDef {
@@ -94,6 +104,19 @@ const fn required(mut def: FieldDef) -> FieldDef {
 const fn with_default(mut def: FieldDef, value: &'static str) -> FieldDef {
     def.default = Some(value);
     def
+}
+
+const fn internal(mut def: FieldDef) -> FieldDef {
+    def.internal = true;
+    def
+}
+
+const fn flag(name: &'static str, label: &'static str) -> FieldDef {
+    FieldDef { name, label, field_type: FieldType::Bool, required: false, default: None, internal: false }
+}
+
+const fn date_time(name: &'static str, label: &'static str, required: bool) -> FieldDef {
+    FieldDef { name, label, field_type: FieldType::DateTime, required, default: None, internal: false }
 }
 
 pub const SCHULARTEN: &[&str] = &[
@@ -117,6 +140,16 @@ pub const AUFTRAGGEBER: &[&str] = &["Ministerium", "Sachgebietsleitung", "Schull
 /// Zustände eines Auftrags. „Erledigt“ ist der einzige abgeschlossene Zustand.
 pub const AUFTRAGSSTATUS: &[&str] = &["Offen", "In Arbeit", "Wartet", "Erledigt"];
 
+pub const REISESTATUS: &[&str] = &["Entwurf", "Beantragt", "Genehmigt", "Abgerechnet", "Bezahlt"];
+pub const REISEARTEN: &[&str] = &["Dienstreise", "Fortbildungsreise"];
+pub const REISEORTE: &[&str] = &["Wohnort", "Dienststelle", "Anderer Ort"];
+pub const MAHLZEITEN: &[&str] = &["Frühstück", "Mittagessen", "Abendessen"];
+pub const ANHANGARTEN: &[&str] = &["Fahrkarte", "Teilnahmebescheinigung", "Hotelrechnung", "Sonstiges"];
+pub const SMTP_SICHERHEIT: &[&str] = &["STARTTLS", "SSL/TLS", "keine"];
+
+/// Feste ID des Eintrags mit den Stammdaten (gleich auf allen Rechnern, damit sie sich zusammenführen lassen).
+pub const STAMMDATEN_ID: &str = "stammdaten-0000";
+
 pub const ROLLEN: &[&str] = &[
     "Schulleitung",
     "Stellvertretung",
@@ -139,6 +172,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_field: "name",
             sort_desc: false,
             personal: false,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("name", "Name", true),
                 choice("schulart", "Schulart", SCHULARTEN),
@@ -160,6 +195,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_field: "name",
             sort_desc: false,
             personal: true,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("name", "Name", true),
                 choice("rolle", "Rolle", ROLLEN),
@@ -178,6 +215,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_field: "name",
             sort_desc: false,
             personal: true,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("name", "Name", true),
                 text("funktion", "Funktion", false),
@@ -195,6 +234,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_field: "datum",
             sort_desc: true,
             personal: false,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("thema", "Thema", true),
                 date("datum", "Datum", true),
@@ -214,6 +255,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_desc: true,
             // Protokolle nennen oft Personen. Deshalb sind sie für die KI zunächst gesperrt.
             personal: true,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("titel", "Titel", true),
                 required(choice("art", "Art", PROTOKOLLARTEN)),
@@ -232,6 +275,8 @@ pub fn kinds() -> Vec<KindDef> {
             sort_field: "frist",
             sort_desc: false,
             personal: false,
+            hidden: false,
+            singleton: false,
             fields: vec![
                 text("titel", "Titel", true),
                 choice("auftraggeber", "Auftraggeber", AUFTRAGGEBER),
@@ -244,6 +289,111 @@ pub fn kinds() -> Vec<KindDef> {
                 markdown("beschreibung", "Beschreibung"),
             ],
         },
+        KindDef {
+            kind: "reise",
+            label: "Dienstreise",
+            label_plural: "Dienstreisen",
+            title_field: "zweck",
+            sort_field: "reise_beginn",
+            sort_desc: true,
+            personal: false,
+            hidden: false,
+            singleton: false,
+            fields: vec![
+                text("zweck", "Zweck / Titel", true),
+                text("geschaeftsort", "Geschäftsort", true),
+                required(with_default(choice("art", "Art der Reise", REISEARTEN), "Dienstreise")),
+                required(with_default(choice("status", "Status", REISESTATUS), "Entwurf")),
+                flag("taegliche_rueckkehr", "Tägliche Rückkehr möglich"),
+                date_time("reise_beginn", "Reiseantritt", true),
+                date_time("dienstgeschaeft_beginn", "Beginn Dienstgeschäft", true),
+                date_time("dienstgeschaeft_ende", "Ende Dienstgeschäft", true),
+                date_time("reise_ende", "Beendigung der Reise", true),
+                with_default(choice("abfahrt_von", "Abfahrt von", REISEORTE), "Wohnort"),
+                text("abfahrt_von_text", "anderer Abfahrtsort", false),
+                with_default(choice("rueckkehr_nach", "Rückkehr nach", REISEORTE), "Wohnort"),
+                text("rueckkehr_nach_text", "anderer Rückkehrort", false),
+                text("uebernachtungskosten", "Voraussichtliche Übernachtungskosten", false),
+                text("sonstige_kosten", "Voraussichtliche sonstige Kosten", false),
+                text("kostentraeger_dritte", "Ersatz der Reisekosten durch Dritte", false),
+                flag("oepnv", "Öffentlicher Nahverkehr"),
+                flag("bahn", "Deutsche Bahn"),
+                flag("bahncard", "BahnCard vorhanden"),
+                number("fahrkartenpreis", "Fahrkartenpreis (€)"),
+                flag("verpflegung_gestellt", "Verpflegung unentgeltlich gestellt"),
+                date("verpflegung_von", "Verpflegung ab", false),
+                choice("verpflegung_von_mahlzeit", "erste Mahlzeit", MAHLZEITEN),
+                date("verpflegung_bis", "Verpflegung bis", false),
+                choice("verpflegung_bis_mahlzeit", "letzte Mahlzeit", MAHLZEITEN),
+                flag("hotel_selbst_bezahlt", "Unterkunft selbst bezahlt"),
+                long_text("hinweise", "Ergänzende Hinweise"),
+                text("aktenzeichen", "Aktenzeichen", false),
+                date("bezahlt_am", "Bezahlt am", false),
+                internal(text("veranstalter_formular", "Formular des Veranstalters", false)),
+                internal(text("antrag_pdf", "Antrag (PDF)", false)),
+                internal(text("genehmigung_pdf", "Genehmigung (PDF)", false)),
+                internal(text("abrechnung_pdf", "Abrechnung (PDF)", false)),
+                internal(date_time("antrag_versendet_am", "Antrag versendet am", false)),
+                internal(date_time("abrechnung_versendet_am", "Abrechnung versendet am", false)),
+            ],
+        },
+        KindDef {
+            kind: "anhang",
+            label: "Anhang",
+            label_plural: "Anhänge",
+            title_field: "name",
+            sort_field: "name",
+            sort_desc: false,
+            personal: false,
+            hidden: true,
+            singleton: false,
+            fields: vec![
+                required(reference("reise", "Reise", "reise")),
+                required(with_default(choice("art", "Art", ANHANGARTEN), "Sonstiges")),
+                text("name", "Dateiname", true),
+                internal(text("datei", "Datei", true)),
+                with_default(flag("beilegen", "Der Abrechnung beilegen"), "true"),
+            ],
+        },
+        KindDef {
+            kind: "stammdaten",
+            label: "Stammdaten",
+            label_plural: "Stammdaten",
+            title_field: "name",
+            sort_field: "name",
+            sort_desc: false,
+            personal: true,
+            hidden: true,
+            singleton: true,
+            fields: vec![
+                text("name", "Name", false),
+                text("vorname", "Vorname", false),
+                text("plz", "PLZ", false),
+                text("ort", "Ort", false),
+                text("strasse", "Straße", false),
+                text("telefon", "Telefon", false),
+                text("email", "E-Mail im Formular", false),
+                long_text("dienststelle", "Beschäftigungsbehörde (Name, Adresse)"),
+                text("dienststelle_kurz", "Beschäftigungsbehörde (Kurzname)", false),
+                text("abteilung", "Sachgebiet/Referat/Abteilung", false),
+                text("besoldungsgruppe", "Bes.-/Entgeltgruppe", false),
+                text("org_nr", "Organisationsnummer", false),
+                text("personal_nr", "Personalnummer (VIVA)", false),
+                text("iban", "IBAN", false),
+                text("bic", "BIC", false),
+                text("kreditinstitut", "Kreditinstitut", false),
+                text("unterschrift_ort", "Ort für Unterschrift", false),
+                long_text("unterschrift_svg", "Unterschrift (SVG-Text)"),
+                text("empfaenger_antrag", "Empfänger Dienstreiseantrag (Verwaltung)", false),
+                text("empfaenger_abrechnung", "Empfänger Abrechnung (LfF)", false),
+                text("absender", "Absenderadresse", false),
+                text("smtp_host", "SMTP-Server", false),
+                number("smtp_port", "SMTP-Port"),
+                text("smtp_user", "SMTP-Benutzer", false),
+                with_default(choice("smtp_sicherheit", "Verschlüsselung", SMTP_SICHERHEIT), "STARTTLS"),
+            ],
+        },
+
     ]
 }
 
@@ -413,7 +563,7 @@ mod tests {
     use serde_json::json;
 
     fn def(field_type: FieldType) -> FieldDef {
-        FieldDef { name: "f", label: "Feld", field_type, required: false, default: None }
+        FieldDef { name: "f", label: "Feld", field_type, required: false, default: None, internal: false }
     }
 
     #[test]
@@ -450,7 +600,8 @@ mod tests {
                 if let Some(d) = f.default {
                     match &f.field_type {
                         FieldType::Choice { options } => assert!(options.contains(&d), "{}.{}: Vorgabe „{d}“ ist keine Option", k.kind, f.name),
-                        _ => panic!("{}.{}: Vorgaben gibt es nur für Auswahlfelder", k.kind, f.name),
+                        FieldType::Bool => assert!(d == "true" || d == "false", "{}.{}: Vorgabe muss true oder false sein", k.kind, f.name),
+                        _ => panic!("{}.{}: Vorgaben gibt es nur für Auswahl- und Ja/Nein-Felder", k.kind, f.name),
                     }
                 }
             }

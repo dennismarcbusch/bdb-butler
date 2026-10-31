@@ -61,7 +61,8 @@ impl McpConfig {
 
     /// Darf die KI Einträge dieses Typs sehen und (mit Schreibstufe) ändern?
     pub fn kind_allowed(&self, def: &KindDef) -> bool {
-        !def.personal || self.allow_personal.iter().any(|k| k == def.kind)
+        // Versteckte Typen (Stammdaten, Anhänge) verwaltet die Anwendung selbst, die KI kommt nie heran.
+        !def.hidden && (!def.personal || self.allow_personal.iter().any(|k| k == def.kind))
     }
 }
 
@@ -310,6 +311,7 @@ fn run_tool(service: &mut Service, config: &McpConfig, name: &str, args: &Value,
         "list_kinds" => {
             let kinds: Vec<Value> = schema::kinds()
                 .into_iter()
+                .filter(|def| !def.hidden)
                 .map(|def| {
                     let accessible = config.kind_allowed(&def);
                     json!({

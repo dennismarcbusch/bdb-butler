@@ -124,18 +124,18 @@ pub struct RecordView {
     pub fields: Map<String, Value>,
 }
 
-struct Session {
-    vault: Vault,
-    clock: Clock,
+pub(crate) struct Session {
+    pub(crate) vault: Vault,
+    pub(crate) clock: Clock,
 }
 
 pub struct Service {
-    dir: PathBuf,
-    store: Store,
-    config: Config,
+    pub(crate) dir: PathBuf,
+    pub(crate) store: Store,
+    pub(crate) config: Config,
     mcp: McpConfig,
     kdf: KdfParams,
-    session: Option<Session>,
+    pub(crate) session: Option<Session>,
 }
 
 impl Service {
@@ -202,7 +202,7 @@ impl Service {
         let mut allowed: Vec<String> = Vec::new();
         for kind in allow_personal {
             match schema::kind(kind) {
-                Some(def) if def.personal => {
+                Some(def) if def.personal && !def.hidden => {
                     if !allowed.contains(kind) {
                         allowed.push(kind.clone());
                     }
@@ -409,7 +409,7 @@ impl Service {
 
     // ----- Einträge --------------------------------------------------------------------------------------
 
-    fn unlocked(&mut self) -> Result<(&Store, &Vault, &mut Clock)> {
+    pub(crate) fn unlocked(&mut self) -> Result<(&Store, &Vault, &mut Clock)> {
         let session = self.session.as_mut().ok_or(ServiceError::Locked)?;
         Ok((&self.store, &session.vault, &mut session.clock))
     }
@@ -438,7 +438,10 @@ impl Service {
         Ok(store
             .list(vault)?
             .into_iter()
-            .filter(|(_, rec)| rec.kind() != CONFLICT_KIND && !rec.is_deleted())
+            .filter(|(_, rec)| {
+                let hidden = schema::kind(rec.kind()).is_some_and(|d| d.hidden);
+                rec.kind() != CONFLICT_KIND && !hidden && !rec.is_deleted()
+            })
             .map(|(id, rec)| view(id, &rec))
             .collect())
     }
@@ -454,12 +457,23 @@ impl Service {
     /// Legt einen Eintrag an (`id` leer) oder ändert ihn. Nur die übergebenen Felder werden geschrieben, und
     /// nur wenn sich der Wert ändert. Leere Texte und `null` leeren das Feld. Gibt die ID zurück.
     pub fn save(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>) -> Result<String> {
+        self.save_inner(kind, id, values, false)
+    }
+
+    /// Wie [`Service::save`], legt den Eintrag mit dieser ID an, wenn es ihn noch nicht gibt (für Typen mit
+    /// fester ID wie die Stammdaten).
+    pub fn save_with_id(&mut self, kind: &str, id: &str, values: &Map<String, Value>) -> Result<String> {
+        self.save_inner(kind, Some(id), values, true)
+    }
+
+    fn save_inner(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>, upsert: bool) -> Result<String> {
         let def = schema::kind(kind).ok_or_else(|| ServiceError::UnknownKind(kind.to_string()))?;
         let (store, vault, clock) = self.unlocked()?;
 
         let existing = match id {
             Some(id) => match store.get_record(vault, id)? {
                 Some(rec) if rec.kind() == kind && !rec.is_deleted() => Some(rec),
+                None if upsert => None,
                 _ => return Err(ServiceError::NotFound),
             },
             None => None,
@@ -487,7 +501,11 @@ impl Service {
             for field in &def.fields {
                 if let Some(default) = field.default {
                     if !values.contains_key(field.name) {
-                        normalized.push((field.name, Value::String(default.to_string())));
+                        let value = match field.field_type {
+                            FieldType::Bool => Value::Bool(default == "true"),
+                            _ => Value::String(default.to_string()),
+                        };
+                        normalized.push((field.name, value));
                     }
                 }
             }
@@ -501,8 +519,24 @@ impl Service {
         let is_new = existing.is_none();
         let (id, mut rec) = match (id, existing) {
             (Some(id), Some(rec)) => (id.to_string(), rec),
+            (Some(id), None) if upsert => (id.to_string(), Record::new(kind)?),
             _ => (record::new_id()?, Record::new(kind)?),
         };
+        if kind == "reise" {
+            // Prüft die Zeiten des Ergebnisses (bestehende Werte plus Änderungen), bevor etwas geschrieben wird.
+            let merged = |name: &str| -> String {
+                match normalized.iter().find(|(n, _)| *n == name) {
+                    Some((_, v)) => v.as_str().unwrap_or("").to_string(),
+                    None => rec.get(name).and_then(Value::as_str).unwrap_or("").to_string(),
+                }
+            };
+            check_travel_times(&[
+                ("Reiseantritt", merged("reise_beginn")),
+                ("Beginn Dienstgeschäft", merged("dienstgeschaeft_beginn")),
+                ("Ende Dienstgeschäft", merged("dienstgeschaeft_ende")),
+                ("Beendigung der Reise", merged("reise_ende")),
+            ])?;
+        }
         let mut changed = false;
         for (name, value) in normalized {
             let current = rec.get(name).cloned().unwrap_or(Value::Null);
@@ -559,6 +593,17 @@ fn sort_views(def: &KindDef, views: &mut [RecordView]) {
         };
         primary.then_with(|| text(a, def.title_field).cmp(&text(b, def.title_field)))
     });
+}
+
+/// Reiseantritt, Beginn und Ende des Dienstgeschäfts und Ende der Reise müssen in dieser Reihenfolge liegen.
+fn check_travel_times(times: &[(&str, String)]) -> Result<()> {
+    let present: Vec<&(&str, String)> = times.iter().filter(|(_, t)| !t.is_empty()).collect();
+    for pair in present.windows(2) {
+        if pair[0].1 > pair[1].1 {
+            return Err(ServiceError::Invalid(format!("{} darf nicht nach {} liegen", pair[0].0, pair[1].0)));
+        }
+    }
+    Ok(())
 }
 
 fn view(id: String, rec: &Record) -> RecordView {

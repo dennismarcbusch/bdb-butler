@@ -11,8 +11,12 @@ pub mod mail;
 pub mod mcp;
 pub mod pdf;
 pub mod record;
+pub mod reisen;
 pub mod schema;
+pub mod secrets;
 pub mod service;
+#[cfg(test)]
+pub(crate) mod test_smtp;
 pub mod store;
 pub mod sync;
 
