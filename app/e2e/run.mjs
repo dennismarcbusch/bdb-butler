@@ -312,6 +312,59 @@ async function main() {
       await page.getByText('Keine offenen Konflikte.').waitFor();
     });
 
+    await step('Graph: Knoten, Verbindungen, Auswahl, Filter, Suche', async () => {
+      // Zwei Ansprechpartner anlegen, beide an einer Schule, untereinander verknüpft.
+      const schools = await bridgeCall(bridgeA, 'list', { kind: 'schule' });
+      const grund = schools.find((r) => r.fields.name === 'Grundschule am See').id;
+      const weber = (await bridgeCall(bridgeA, 'save', { kind: 'ansprechpartner', fields: { name: 'Frau Weber', schule: grund } })).id;
+      await bridgeCall(bridgeA, 'save', {
+        kind: 'ansprechpartner',
+        fields: { name: 'Herr Bauer', schule: grund, verknuepfungen: [weber] },
+      });
+
+      await page.getByRole('navigation').getByRole('button', { name: 'Graph' }).click();
+      const nodes = page.getByTestId('graph-node');
+      await nodes.first().waitFor();
+      assert.equal(await nodes.count(), schools.length + 2, 'Knoten: alle Schulen und beide Personen');
+      // Weber-Schule, Bauer-Schule, Bauer-Weber
+      assert.equal(await page.getByTestId('graph-edge').count(), 3);
+      await shot(page, '08-graph');
+
+      // Auswahl zeigt die Verbindungen.
+      await page.getByRole('button', { name: 'Ansprechpartner: Frau Weber' }).click();
+      const panel = page.getByRole('complementary', { name: 'Auswahl' });
+      await panel.getByRole('heading', { name: 'Frau Weber' }).waitFor();
+      await panel.getByRole('button', { name: /Grundschule am See/ }).waitFor();
+      await panel.getByRole('button', { name: /Herr Bauer/ }).waitFor();
+      await shot(page, '09-graph-auswahl');
+
+      // Suche hebt hervor, der Rest wird abgeblendet.
+      await page.getByLabel('Im Graph suchen').fill('bauer');
+      assert.equal(await page.locator('[data-testid="graph-node"].match').count(), 1);
+      assert.ok((await page.locator('[data-testid="graph-node"].dimmed').count()) >= schools.length);
+      await page.getByLabel('Im Graph suchen').fill('');
+
+      // Typ ausblenden: Personen und ihre Kanten verschwinden.
+      await page.getByRole('group', { name: 'Typen anzeigen' }).getByLabel('Ansprechpartner').uncheck();
+      await page.waitForFunction((n) => document.querySelectorAll('[data-testid="graph-node"]').length === n, schools.length);
+      assert.equal(await page.getByTestId('graph-edge').count(), 0);
+      await page.getByRole('group', { name: 'Typen anzeigen' }).getByLabel('Ansprechpartner').check();
+      await nodes.nth(schools.length + 1).waitFor();
+
+      // „Bearbeiten“ öffnet den Eintrag in seiner Typansicht.
+      await page.getByRole('button', { name: 'Ansprechpartner: Herr Bauer' }).click();
+      await panel.getByRole('button', { name: 'Bearbeiten' }).click();
+      await page.getByRole('heading', { name: 'Herr Bauer' }).waitFor();
+      assert.equal(await page.getByLabel('Name *').inputValue(), 'Herr Bauer');
+      // Verknüpfte Einträge sind sichtbar und führen weiter.
+      const related = page.locator('.related');
+      await related.getByRole('button', { name: 'Frau Weber' }).waitFor();
+      await related.getByRole('button', { name: 'Grundschule am See' }).click();
+      await page.getByRole('heading', { name: 'Grundschule am See' }).waitFor();
+      await page.locator('.related').getByRole('button', { name: 'Herr Bauer' }).waitFor();
+      await shot(page, '10-verknuepft');
+    });
+
     await step('Einstellungen: Passwort ändern', async () => {
       await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
       await page.getByLabel('Aktuelles Passwort').fill('falsches passwort hier');

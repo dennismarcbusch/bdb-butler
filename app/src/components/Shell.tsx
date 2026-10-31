@@ -4,6 +4,7 @@ import { messageOf } from '../errors';
 import type { KindDef, RecordView } from '../types';
 import { useSync } from '../useSync';
 import { Conflicts } from './Conflicts';
+import { GraphView } from './GraphView';
 import { KindView } from './KindView';
 import { Settings } from './Settings';
 
@@ -18,6 +19,8 @@ const IDLE_LOCK_MS = 15 * 60 * 1000;
 export function Shell({ configured, onStatusChanged }: Props) {
   const [kinds, setKinds] = useState<KindDef[] | null>(null);
   const [view, setView] = useState('schule');
+  // Eintrag, der beim Wechsel in eine Typansicht ausgewählt werden soll. `nonce` erzwingt ein Neuladen.
+  const [focus, setFocus] = useState<{ kind: string; id: string; nonce: number } | null>(null);
   const [conflicts, setConflicts] = useState<RecordView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const { state: sync, run: runSync, schedule } = useSync(configured);
@@ -63,6 +66,11 @@ export function Shell({ configured, onStatusChanged }: Props) {
     };
   }, [lock]);
 
+  const openRecord = useCallback((kind: string, id: string) => {
+    setFocus((f) => ({ kind, id, nonce: (f?.nonce ?? 0) + 1 }));
+    setView(kind);
+  }, []);
+
   const afterChange = useCallback(() => {
     void loadConflicts();
     schedule();
@@ -84,6 +92,9 @@ export function Shell({ configured, onStatusChanged }: Props) {
               {k.label_plural}
             </button>
           ))}
+          <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>
+            Graph
+          </button>
           <button type="button" class={view === 'conflicts' ? 'active' : ''} onClick={() => setView('conflicts')}>
             Konflikte{conflicts.length > 0 ? ` (${conflicts.length})` : ''}
           </button>
@@ -112,8 +123,17 @@ export function Shell({ configured, onStatusChanged }: Props) {
 
       <main class="content">
         {activeKind && (
-          <KindView key={activeKind.kind} kind={activeKind} kinds={kinds} revision={sync.revision} onChanged={afterChange} />
+          <KindView
+            key={`${activeKind.kind}:${focus?.kind === activeKind.kind ? focus.nonce : 0}`}
+            kind={activeKind}
+            kinds={kinds}
+            revision={sync.revision}
+            initialSelected={focus?.kind === activeKind.kind ? focus.id : null}
+            onChanged={afterChange}
+            onNavigate={openRecord}
+          />
         )}
+        {view === 'graph' && <GraphView kinds={kinds} revision={sync.revision} onOpen={openRecord} />}
         {view === 'conflicts' && (
           <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />
         )}

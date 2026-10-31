@@ -4,18 +4,22 @@ import { messageOf } from '../errors';
 import { matches, titleOf } from '../form';
 import type { KindDef, RecordView } from '../types';
 import { RecordForm } from './RecordForm';
+import { RelatedList } from './RelatedList';
 
 interface Props {
   kind: KindDef;
   kinds: KindDef[];
   revision: number;
+  /// Eintrag, der beim Öffnen ausgewählt sein soll (zum Beispiel aus dem Graphen).
+  initialSelected?: string | null;
   onChanged: () => void;
+  onNavigate: (kind: string, id: string) => void;
 }
 
 /** Liste mit Suche und Formular für einen Typ. */
-export function KindView({ kind, kinds, revision, onChanged }: Props) {
+export function KindView({ kind, kinds, revision, initialSelected = null, onChanged, onNavigate }: Props) {
   const [records, setRecords] = useState<RecordView[]>([]);
-  const [selected, setSelected] = useState<string | 'new' | null>(null);
+  const [selected, setSelected] = useState<string | 'new' | null>(initialSelected);
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -77,6 +81,7 @@ export function KindView({ kind, kinds, revision, onChanged }: Props) {
             onCancel={() => setSelected(null)}
           />
         )}
+        {current && <RelatedList kinds={kinds} recordId={current.id} revision={revision} onOpen={onNavigate} />}
       </section>
     </div>
   );
