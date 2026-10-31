@@ -321,7 +321,8 @@ fn run_tool(service: &mut Service, config: &McpConfig, name: &str, args: &Value,
                         "title_field": def.title_field,
                         "personal": def.personal,
                         "accessible": accessible,
-                        "fields": def.fields,
+                        // Interne Felder (Dateipfade) verwaltet die Anwendung, die KI kann sie nicht schreiben.
+                        "fields": def.fields.iter().filter(|f| !f.internal).collect::<Vec<_>>(),
                     })
                 })
                 .collect();
@@ -687,6 +688,32 @@ mod tests {
         assert_eq!(v["fields"]["name"], "Frau Weber");
         let (v, _) = tool(&s, &c, "search", json!({"query": "weber"}));
         assert_eq!(v["total"], 1);
+    }
+
+    #[test]
+    fn internal_fields_are_neither_offered_nor_writable() {
+        let s = unlocked();
+        let c = config(true, &[]);
+        let trip = json!({
+            "zweck": "Tagung", "geschaeftsort": "Ulm", "reise_beginn": "2026-11-16T07:00",
+            "dienstgeschaeft_beginn": "2026-11-16T09:00", "dienstgeschaeft_ende": "2026-11-16T16:00",
+            "reise_ende": "2026-11-16T18:00",
+        });
+        let id = add(&s, "reise", trip.clone());
+
+        let (kinds, _) = tool(&s, &c, "list_kinds", json!({}));
+        let reise = kinds["kinds"].as_array().unwrap().iter().find(|k| k["kind"] == "reise").unwrap();
+        let names: Vec<&str> = reise["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"zweck") && !names.contains(&"antrag_pdf") && !names.contains(&"abrechnung_versendet_am"));
+
+        // Dateipfade lassen sich weder beim Ändern noch beim Anlegen umbiegen.
+        let (msg, is_error) = tool(&s, &c, "update_record", json!({"id": id, "fields": {"abrechnung_pdf": "Berichte/bericht.md"}}));
+        assert!(is_error, "{msg}");
+        let mut with_path = trip.as_object().unwrap().clone();
+        with_path.insert("antrag_pdf".into(), json!("Berichte/bericht.md"));
+        let (_, is_error) = tool(&s, &c, "create_record", json!({"kind": "reise", "fields": with_path}));
+        assert!(is_error);
+        assert!(s.lock().unwrap().get(&id).unwrap().fields.get("abrechnung_pdf").is_none());
     }
 
     #[test]

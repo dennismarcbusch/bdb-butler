@@ -456,17 +456,33 @@ impl Service {
 
     /// Legt einen Eintrag an (`id` leer) oder ändert ihn. Nur die übergebenen Felder werden geschrieben, und
     /// nur wenn sich der Wert ändert. Leere Texte und `null` leeren das Feld. Gibt die ID zurück.
+    ///
+    /// Interne Felder (zum Beispiel Dateipfade, siehe [`schema::FieldDef::internal`]) lassen sich so nicht
+    /// schreiben. Diesen Weg nehmen Oberfläche und KI. Die Anwendung setzt sie über [`Service::save_trusted`].
     pub fn save(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>) -> Result<String> {
-        self.save_inner(kind, id, values, false)
+        self.save_inner(kind, id, values, false, false)
     }
 
     /// Wie [`Service::save`], legt den Eintrag mit dieser ID an, wenn es ihn noch nicht gibt (für Typen mit
     /// fester ID wie die Stammdaten).
     pub fn save_with_id(&mut self, kind: &str, id: &str, values: &Map<String, Value>) -> Result<String> {
-        self.save_inner(kind, Some(id), values, true)
+        self.save_inner(kind, Some(id), values, true, false)
     }
 
-    fn save_inner(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>, upsert: bool) -> Result<String> {
+    /// Speichern durch die Anwendung selbst: erlaubt auch interne Felder. Nie mit Eingaben von Oberfläche oder KI
+    /// aufrufen, sonst ließen sich zum Beispiel Dateipfade auf fremde Dateien im Ordner umbiegen.
+    pub(crate) fn save_trusted(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>, upsert: bool) -> Result<String> {
+        self.save_inner(kind, id, values, upsert, true)
+    }
+
+    fn save_inner(
+        &mut self,
+        kind: &str,
+        id: Option<&str>,
+        values: &Map<String, Value>,
+        upsert: bool,
+        allow_internal: bool,
+    ) -> Result<String> {
         let def = schema::kind(kind).ok_or_else(|| ServiceError::UnknownKind(kind.to_string()))?;
         let (store, vault, clock) = self.unlocked()?;
 
@@ -482,8 +498,12 @@ impl Service {
         // Prüfen und normalisieren, bevor etwas geschrieben wird.
         let mut normalized: Vec<(&'static str, Value)> = Vec::new();
         for name in values.keys() {
-            if !def.fields.iter().any(|f| f.name == name) {
-                return Err(ServiceError::Invalid(format!("Unbekanntes Feld „{name}“")));
+            match def.fields.iter().find(|f| f.name == name) {
+                None => return Err(ServiceError::Invalid(format!("Unbekanntes Feld „{name}“"))),
+                Some(field) if field.internal && !allow_internal => {
+                    return Err(ServiceError::Invalid(format!("Das Feld „{name}“ verwaltet die Anwendung selbst")))
+                }
+                Some(_) => {}
             }
         }
         for field in &def.fields {

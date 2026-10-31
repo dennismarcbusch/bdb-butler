@@ -55,6 +55,16 @@ describe('Nutzlast für den Kern', () => {
   it('lehnt ungültige Zahlen ab', () => {
     expect(() => toPayload(kind, { ...emptyValues(kind), anzahl: 'viele' })).toThrow(FormError);
   });
+
+  it('lässt interne Felder weg, weil der Kern sie selbst verwaltet', () => {
+    const withInternal: KindDef = {
+      ...kind,
+      fields: [...kind.fields, { name: 'datei', label: 'Datei', type: 'text', required: false, internal: true }],
+    };
+    const payload = toPayload(withInternal, { ...emptyValues(withInternal), name: 'Anna', datei: 'x.pdf' });
+    expect(payload).not.toHaveProperty('datei');
+    expect(payload.name).toBe('Anna');
+  });
 });
 
 describe('Formular und geänderter Eintrag', () => {

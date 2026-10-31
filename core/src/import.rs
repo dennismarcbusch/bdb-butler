@@ -258,7 +258,7 @@ impl Service {
         if let Some(price) = number(row, "fahrkartenpreis") {
             fields.insert("fahrkartenpreis".into(), json!(price));
         }
-        self.save_with_id("reise", id, &fields)?;
+        self.save_trusted("reise", Some(id), &fields, true)?;
 
         // Dateien in den Ordner der Reise kopieren und merken.
         let trip = self.get(id)?;
@@ -278,7 +278,7 @@ impl Service {
             }
         }
         if !paths.is_empty() {
-            self.save("reise", Some(id), &paths)?;
+            self.save_trusted("reise", Some(id), &paths, false)?;
         }
         Ok(())
     }
@@ -293,7 +293,7 @@ impl Service {
         fields.insert("name".into(), json!(name));
         fields.insert("datei".into(), json!(stored));
         fields.insert("beilegen".into(), json!(truthy(row, "beilegen")));
-        if let Err(e) = self.save_with_id("anhang", id, &fields) {
+        if let Err(e) = self.save_trusted("anhang", Some(id), &fields, true) {
             // Keine verwaiste Kopie zurücklassen.
             if let Ok(path) = self.file_path(&stored) {
                 let _ = fs::remove_file(path);

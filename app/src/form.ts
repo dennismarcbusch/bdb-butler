@@ -61,10 +61,13 @@ export function changedFields(current: FormValues, initial: FormValues): string[
   return Object.keys(current).filter((name) => JSON.stringify(current[name]) !== JSON.stringify(initial[name]));
 }
 
-/** Wandelt Formularwerte in Felder für den Kern. Leere Eingaben werden zu `null` und leeren das Feld. */
+/**
+ * Wandelt Formularwerte in Felder für den Kern. Leere Eingaben werden zu `null` und leeren das Feld. Interne Felder
+ * (zum Beispiel Dateipfade) verwaltet der Kern selbst, sie gehören nie in die Nutzlast.
+ */
 export function toPayload(kind: KindDef, values: FormValues): Record<string, JsonValue> {
   const payload: Record<string, JsonValue> = {};
-  for (const field of kind.fields) {
+  for (const field of kind.fields.filter((f) => !f.internal)) {
     const value = values[field.name] ?? emptyValue(field);
     switch (field.type) {
       case 'bool':
