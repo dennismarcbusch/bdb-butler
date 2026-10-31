@@ -6,6 +6,7 @@
 pub mod api;
 pub mod bridge;
 pub mod crypto;
+pub mod mcp;
 pub mod record;
 pub mod schema;
 pub mod service;
@@ -15,5 +16,7 @@ pub mod sync;
 pub use crypto::{Error, KdfParams, Keyring, RecoveryKey, Vault};
 pub use record::{Clock, Conflict, Record, RecordError, Stamp};
 pub use store::{ApplyOutcome, Pending, RemoteEntry, Store, StoreError};
+pub use api::App;
+pub use mcp::{McpConfig, McpServer};
 pub use service::{Config, RecordView, Service, ServiceError, Status};
 pub use sync::{SyncClient, SyncError, SyncReport};

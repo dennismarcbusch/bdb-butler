@@ -1,4 +1,4 @@
-import type { Config, JsonValue, KindDef, RecordView, Status, SyncReport } from './types';
+import type { AuditEntry, Config, JsonValue, KindDef, McpState, RecordView, Status, SyncReport } from './types';
 
 /** Fehler des Kerns mit stabilem Code (zum Beispiel `locked`, `wrong_secret`, `network`). */
 export class BackendError extends Error {
@@ -72,4 +72,9 @@ export const api = {
     call<{ id: string }>('save', id ? { kind, id, fields } : { kind, fields }),
   delete: (id: string) => call<null>('delete', { id }),
   conflicts: () => call<RecordView[]>('conflicts'),
+  mcpGet: () => call<McpState>('mcp_get'),
+  mcpSet: (enabled: boolean, port: number, write: boolean, allowPersonal: string[]) =>
+    call<McpState>('mcp_set', { enabled, port, write, allow_personal: allowPersonal }),
+  mcpNewToken: () => call<McpState>('mcp_new_token'),
+  mcpAudit: (limit = 30) => call<AuditEntry[]>('mcp_audit', { limit }),
 };

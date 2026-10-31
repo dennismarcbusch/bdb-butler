@@ -3,8 +3,9 @@
 //! Aufruf: `dev_bridge <Datenordner> [Port]`. Mit `BDB_FAST_KDF=1` laufen Anlegen und Entsperren mit
 //! schwachen Argon2-Parametern, damit Tests schnell sind. Nur für Tests verwenden.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use bdb_core::api::App;
 use bdb_core::bridge;
 use bdb_core::crypto::KdfParams;
 use bdb_core::service::Service;
@@ -23,12 +24,17 @@ fn main() {
         KdfParams::standard()
     };
     let service = match Service::open(std::path::Path::new(&dir), kdf) {
-        Ok(s) => Arc::new(Mutex::new(s)),
+        Ok(s) => Arc::new(App::new(s)),
         Err(e) => {
             eprintln!("Datenordner öffnen: {e}");
             std::process::exit(1);
         }
     };
+    match service.apply_mcp_config() {
+        Ok(Some(url)) => println!("KI-Zugriff läuft auf {url}"),
+        Ok(None) => {}
+        Err(e) => eprintln!("KI-Zugriff: {e}"),
+    }
     match bridge::spawn(&format!("127.0.0.1:{port}"), service) {
         Ok((addr, handle)) => {
             println!("Brücke läuft auf http://{addr}");

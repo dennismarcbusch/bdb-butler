@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
@@ -363,6 +366,116 @@ async function main() {
       await page.getByRole('heading', { name: 'Grundschule am See' }).waitFor();
       await page.locator('.related').getByRole('button', { name: 'Herr Bauer' }).waitFor();
       await shot(page, '10-verknuepft');
+    });
+
+    await step('KI-Zugriff: echter MCP-Client, Sperre für Personen, Schreibstufe, Protokoll, Token', async () => {
+      const mcpPort = await freePort();
+      await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
+      const mcp = page.getByRole('form', { name: 'KI-Zugriff' });
+      await mcp.getByTestId('mcp-status').filter({ hasText: 'Der KI-Zugriff ist aus.' }).waitFor();
+      await mcp.getByLabel('KI-Zugriff einschalten').check();
+      await mcp.getByLabel('Schreibzugriff').check();
+      await mcp.getByLabel('Port').fill(String(mcpPort));
+      await mcp.getByRole('button', { name: 'Speichern' }).click();
+      await mcp.getByTestId('mcp-status').filter({ hasText: 'Läuft auf' }).waitFor();
+      await mcp.getByRole('button', { name: 'Anzeigen' }).click();
+      const token = (await mcp.getByTestId('mcp-token').innerText()).trim();
+      assert.match(token, /^[0-9a-f]{64}$/);
+      const mcpUrl = new URL(`http://127.0.0.1:${mcpPort}/mcp`);
+      await shot(page, '11-ki-zugriff');
+
+      const connect = async (withToken) => {
+        const client = new Client({ name: 'e2e', version: '1.0.0' });
+        const transport = new StreamableHTTPClientTransport(mcpUrl, {
+          requestInit: { headers: { Authorization: `Bearer ${withToken}` } },
+        });
+        await client.connect(transport);
+        return client;
+      };
+      const text = (result) => result.content.map((c) => c.text).join('');
+
+      // Ohne gültiges Token kommt niemand hinein.
+      await assert.rejects(connect('falsch'), 'ein falsches Token muss abgelehnt werden');
+
+      const client = await connect(token);
+      try {
+        assert.equal(client.getServerVersion()?.name, 'bdb-butler');
+        const tools = (await client.listTools()).tools.map((t) => t.name).sort();
+        assert.deepEqual(tools, ['create_record', 'get_record', 'list_kinds', 'list_records', 'search', 'update_record']);
+
+        // Typen und Sperren.
+        const kinds = JSON.parse(text(await client.callTool({ name: 'list_kinds', arguments: {} })));
+        assert.equal(kinds.write, true);
+        assert.equal(kinds.kinds.find((k) => k.kind === 'schule').accessible, true);
+        assert.equal(kinds.kinds.find((k) => k.kind === 'ansprechpartner').accessible, false);
+
+        // Lesen und Schreiben bei zugänglichen Typen.
+        const created = await client.callTool({
+          name: 'create_record',
+          arguments: { kind: 'schule', fields: { name: 'Von der KI angelegte Schule', ort: 'Passau' } },
+        });
+        assert.ok(!created.isError, text(created));
+        const createdId = JSON.parse(text(created)).id;
+        const found = JSON.parse(text(await client.callTool({ name: 'search', arguments: { query: 'passau' } })));
+        assert.equal(found.total, 1);
+        await client.callTool({ name: 'update_record', arguments: { id: createdId, fields: { ort: 'Regensburg' } } });
+        const got = JSON.parse(text(await client.callTool({ name: 'get_record', arguments: { id: createdId } })));
+        assert.equal(got.fields.ort, 'Regensburg');
+        const invalid = await client.callTool({ name: 'create_record', arguments: { kind: 'schule', fields: { schulart: 'Zirkus', name: 'X' } } });
+        assert.equal(invalid.isError, true);
+
+        // Personen sind gesperrt und tauchen auch in der Suche nicht auf.
+        const blocked = await client.callTool({ name: 'list_records', arguments: { kind: 'ansprechpartner' } });
+        assert.equal(blocked.isError, true);
+        assert.match(text(blocked), /gesperrt/);
+        assert.ok(!text(blocked).includes('Weber'), 'Inhalte gesperrter Typen dürfen nicht durchsickern');
+        const search = JSON.parse(text(await client.callTool({ name: 'search', arguments: { query: 'weber' } })));
+        assert.equal(search.total, 0);
+
+        // Der Nutzer gibt Ansprechpartner frei, danach sind sie lesbar.
+        await mcp.getByLabel('Ansprechpartner für die KI freigeben').check();
+        await mcp.getByRole('button', { name: 'Speichern' }).click();
+        await page.getByText('Gespeichert.').first().waitFor();
+        const allowed = JSON.parse(text(await client.callTool({ name: 'list_records', arguments: { kind: 'ansprechpartner' } })));
+        assert.deepEqual(allowed.records.map((r) => r.fields.name).sort(), ['Frau Weber', 'Herr Bauer']);
+
+        // Schreibzugriff ausschalten: Werkzeuge verschwinden, Schreiben wird abgelehnt.
+        await mcp.getByLabel('Schreibzugriff').uncheck();
+        await mcp.getByRole('button', { name: 'Speichern' }).click();
+        const readOnlyTools = (await client.listTools()).tools.map((t) => t.name);
+        assert.ok(!readOnlyTools.includes('create_record'));
+        const denied = await client.callTool({ name: 'create_record', arguments: { kind: 'schule', fields: { name: 'Darf nicht sein' } } });
+        assert.equal(denied.isError, true);
+        assert.match(text(denied), /Schreibzugriff/);
+      } finally {
+        await client.close();
+      }
+
+      // Das Protokoll zeigt die Zugriffe, aber keine Inhalte.
+      await mcp.getByRole('button', { name: 'Aktualisieren' }).click();
+      const audit = mcp.getByTestId('mcp-audit');
+      await audit.getByRole('cell', { name: 'create_record' }).first().waitFor();
+      const auditText = await audit.innerText();
+      assert.ok(auditText.includes('abgelehnt'), 'abgelehnte Zugriffe stehen im Protokoll');
+      for (const secret of ['Passau', 'Regensburg', 'Von der KI angelegte Schule', 'Frau Weber', 'Darf nicht sein']) {
+        assert.ok(!auditText.includes(secret), `Inhalt „${secret}“ im Protokoll`);
+      }
+      await shot(page, '12-ki-protokoll');
+
+      // Die von der KI angelegte Schule ist in der Oberfläche sichtbar.
+      await page.getByRole('navigation').getByRole('button', { name: 'Schulen' }).click();
+      await page.getByRole('button', { name: 'Von der KI angelegte Schule' }).waitFor();
+
+      // Neues Token: das alte hat keinen Zugriff mehr.
+      await page.getByRole('navigation').getByRole('button', { name: 'Einstellungen' }).click();
+      await mcp.getByRole('button', { name: 'Neues Token erzeugen' }).click();
+      await mcp.getByRole('button', { name: 'Wirklich neu erzeugen' }).click();
+      await page.getByText('Neues Token erzeugt').waitFor();
+      const newToken = (await mcp.getByTestId('mcp-token').innerText()).trim();
+      assert.notEqual(newToken, token);
+      await assert.rejects(connect(token), 'das alte Token muss ungültig sein');
+      const again = await connect(newToken);
+      await again.close();
     });
 
     await step('Einstellungen: Passwort ändern', async () => {

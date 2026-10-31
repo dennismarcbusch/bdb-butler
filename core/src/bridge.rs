@@ -7,19 +7,18 @@
 
 use std::io::Read;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use crate::api;
-use crate::service::Service;
+use crate::api::{self, App};
 
 const MAX_BODY: u64 = 2 * 1024 * 1024;
 
 /// Startet die Brücke in einem eigenen Thread. Gibt die tatsächliche Adresse und den Thread zurück.
-pub fn spawn(addr: &str, service: Arc<Mutex<Service>>) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
+pub fn spawn(addr: &str, app: Arc<App>) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
     let server = Server::http(addr).map_err(|e| std::io::Error::other(e.to_string()))?;
     let local = server
         .server_addr()
@@ -30,7 +29,7 @@ pub fn spawn(addr: &str, service: Arc<Mutex<Service>>) -> std::io::Result<(Socke
     }
     let handle = std::thread::spawn(move || {
         for request in server.incoming_requests() {
-            handle(request, &service);
+            handle(request, &app);
         }
     });
     Ok((local, handle))
@@ -66,7 +65,7 @@ fn respond(request: Request, status: u16, body: Value) {
     let _ = request.respond(response);
 }
 
-fn handle(mut request: Request, service: &Mutex<Service>) {
+fn handle(mut request: Request, app: &App) {
     if header(&request, "Host").is_none_or(|h| !is_local_host(&h))
         || header(&request, "Origin").is_some_and(|o| !is_local_origin(&o))
     {
@@ -95,7 +94,7 @@ fn handle(mut request: Request, service: &Mutex<Service>) {
         }
     };
 
-    match api::call(service, command, &args) {
+    match api::call(app, command, &args) {
         Ok(data) => respond(request, 200, json!({"ok": true, "data": data})),
         Err(error) => respond(request, 400, json!({"ok": false, "error": error})),
     }
@@ -105,6 +104,7 @@ fn handle(mut request: Request, service: &Mutex<Service>) {
 mod tests {
     use super::*;
     use crate::crypto::KdfParams;
+    use crate::service::Service;
 
     const FAST: KdfParams = KdfParams { m_kib: 8, t: 1, p: 1 };
 
@@ -113,8 +113,8 @@ mod tests {
         getrandom::getrandom(&mut bytes).unwrap();
         let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let dir = std::env::temp_dir().join(format!("bdb-bridge-test-{name}"));
-        let service = Arc::new(Mutex::new(Service::open(&dir, FAST).unwrap()));
-        let (addr, _) = spawn("127.0.0.1:0", service).unwrap();
+        let app = Arc::new(App::new(Service::open(&dir, FAST).unwrap()));
+        let (addr, _) = spawn("127.0.0.1:0", app).unwrap();
         format!("http://{addr}")
     }
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn refuses_non_local_addresses() {
-        let service = Arc::new(Mutex::new(Service::open(&std::env::temp_dir().join("bdb-bridge-x"), FAST).unwrap()));
-        assert!(spawn("0.0.0.0:0", service).is_err());
+        let app = Arc::new(App::new(Service::open(&std::env::temp_dir().join("bdb-bridge-x"), FAST).unwrap()));
+        assert!(spawn("0.0.0.0:0", app).is_err());
     }
 }

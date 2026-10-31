@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
-import type { Config } from '../types';
+import type { Config, KindDef } from '../types';
 import type { SyncState } from '../useSync';
+import { McpSettings } from './McpSettings';
 
 interface Props {
+  kinds: KindDef[];
   configured: boolean;
   sync: SyncState;
   onSync: () => void;
@@ -13,7 +15,7 @@ interface Props {
 
 const MIN_PASSWORD = 10;
 
-export function Settings({ configured, sync, onSync, onStatusChanged }: Props) {
+export function Settings({ kinds, configured, sync, onSync, onStatusChanged }: Props) {
   const [config, setConfig] = useState<Config | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +111,8 @@ export function Settings({ configured, sync, onSync, onStatusChanged }: Props) {
           {sync.busy ? 'Gleiche ab …' : 'Jetzt abgleichen'}
         </button>
       </div>
+
+      <McpSettings kinds={kinds} />
 
       <form onSubmit={changePassword}>
         <h3>Master-Passwort ändern</h3>

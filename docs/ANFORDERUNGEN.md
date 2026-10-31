@@ -81,6 +81,5 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 ## Offene Punkte
 
-- MCP-Server: Welche Tools genau und welche weiteren Felder für die KI sichtbar sind.
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen.
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

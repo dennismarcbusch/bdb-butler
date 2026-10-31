@@ -69,13 +69,16 @@ Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`se
 
 ## Lokaler MCP-Server
 
-- Läuft im Prozess der App und hat damit Zugriff auf den entsperrten Datenschlüssel. Er funktioniert nur, solange die App läuft und entsperrt ist.
-- Er lauscht ausschließlich auf localhost und verlangt ein Token. Claude Desktop oder Claude Code verbinden sich per HTTP, gegebenenfalls über einen kleinen stdio-Vermittler.
-- Geplante Eigenschaften: Zugriffsstufen (nur lesen, lesen und schreiben), ein Protokoll der Schreibzugriffe, einstellbare Sichtbarkeit einzelner Felder für die KI, kein Löschen (nur Archivieren) und kein Mailversand.
-- Entschieden: Typen mit Personenbezug (Ansprechpartner, beratene Personen) sind für die KI standardmäßig gesperrt und lassen sich einzeln freischalten. Das unterstützt die Vorgabe, dass über die KI keine personenbezogenen Daten verarbeitet werden. Die Verantwortung dafür bleibt beim Nutzer.
-- Die Logik für Datenzugriff und Validierung liegt im Kern und wird von Oberfläche und MCP-Server gemeinsam genutzt.
-- Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein.
-- Offen: Welche Tools genau und welche Felder sichtbar sind.
+Umgesetzt in `core/src/mcp.rs`, Einstellungen in der App unter „Einstellungen, KI-Zugriff“.
+
+- **Transport:** Streamable HTTP (`POST /mcp`, JSON-RPC, Antworten als `application/json`, keine Sitzungen). Getestet mit dem offiziellen MCP-SDK (TypeScript) als Client. Unterstützte Protokollversionen: 2025-06-18, 2025-03-26, 2024-11-05.
+- **Läuft im Prozess der App** und hat damit Zugriff auf den entsperrten Datenschlüssel. Ist die App gesperrt, antworten die Werkzeuge mit einem Hinweis. Der Schlüssel verlässt den Prozess nie.
+- **Aus, bis der Nutzer ihn einschaltet.** Er lauscht nur auf `127.0.0.1`, verlangt ein Bearer-Token (256 Bit, in `mcp.json` mit Rechten 0600) und prüft `Host` und `Origin` gegen DNS-Rebinding.
+- **Einstellungen gelten sofort:** Token, Schreibstufe und Freigaben liest der Server bei jeder Anfrage neu. Nur Ein/Aus und der Port erfordern einen Neustart. Grund: Die HTTP-Bibliothek schließt bestehende Verbindungen nicht, wenn ein Server angehalten wird, Anfragen darauf hingen bis zum Zeitablauf des Clients.
+- **Werkzeuge:** `list_kinds`, `list_records`, `get_record`, `search`; mit Schreibstufe zusätzlich `create_record` und `update_record`. Kein Löschen, kein Mailversand. Ohne Schreibstufe erscheinen die Schreibwerkzeuge nicht in der Liste und werden abgelehnt.
+- **Typen mit Personenbezug** (Ansprechpartner) sind für die KI gesperrt, bis der Nutzer sie einzeln freigibt. Das gilt für Lesen, Suchen und Schreiben, auch über `update_record` und `get_record` per ID. Die Fehlermeldung enthält keine Inhalte. Verweise (IDs) auf gesperrte Einträge in zugänglichen Einträgen bleiben sichtbar, die Inhalte nicht.
+- **Protokoll** (`mcp-audit.log` im Datenordner, wird bei 1 MiB rotiert, in der App einsehbar): Zeit, Werkzeug, Typ, ID, Feldnamen und Ergebnis, nie Inhalte.
+- Die Datenschutzfreigabe schließt den MCP-Zugriff auf Klartext ein. Der Nutzer achtet selbst darauf, dass über die KI keine personenbezogenen Daten verarbeitet werden.
 
 ## PDFs, Anhänge und Mail
 

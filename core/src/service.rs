@@ -5,12 +5,14 @@
 //! [`crate::schema`] an. Der Datenschlüssel bleibt im Speicher des Dienstes und verlässt ihn nicht.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::crypto::{self, KdfParams, Vault};
+use crate::mcp::McpConfig;
 use crate::record::{self, Clock, Record};
 use crate::schema::{self, FieldType, KindDef};
 use crate::store::{Store, StoreError, CONFLICT_KIND};
@@ -20,7 +22,11 @@ use crate::sync::{self, SyncClient, SyncError, SyncReport};
 pub const MIN_PASSWORD_CHARS: usize = 10;
 
 const SETTINGS_FILE: &str = "settings.json";
+const MCP_FILE: &str = "mcp.json";
+const AUDIT_FILE: &str = "mcp-audit.log";
 const DB_FILE: &str = "bdb.sqlite";
+/// Ab dieser Größe wird das Protokoll des KI-Zugriffs rotiert.
+const AUDIT_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
@@ -127,6 +133,7 @@ pub struct Service {
     dir: PathBuf,
     store: Store,
     config: Config,
+    mcp: McpConfig,
     kdf: KdfParams,
     session: Option<Session>,
 }
@@ -143,7 +150,106 @@ impl Service {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::default(),
             Err(e) => return Err(ServiceError::Settings(e.to_string())),
         };
-        Ok(Self { dir: dir.to_path_buf(), store, config, kdf, session: None })
+        let mut service = Self { dir: dir.to_path_buf(), store, config, mcp: McpConfig::default(), kdf, session: None };
+        service.load_mcp_config()?;
+        Ok(service)
+    }
+
+    // ----- KI-Zugriff (MCP) ------------------------------------------------------------------------------
+
+    fn write_private(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        let path = self.dir.join(name);
+        fs::write(&path, bytes).map_err(|e| ServiceError::Settings(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    fn load_mcp_config(&mut self) -> Result<()> {
+        let mut config: McpConfig = match fs::read(self.dir.join(MCP_FILE)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| ServiceError::Settings(format!("mcp.json ist ungültig: {e}")))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => McpConfig::default(),
+            Err(e) => return Err(ServiceError::Settings(e.to_string())),
+        };
+        if config.token.is_empty() {
+            config.token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
+            self.mcp = config;
+            self.save_mcp_config()?;
+        } else {
+            self.mcp = config;
+        }
+        Ok(())
+    }
+
+    fn save_mcp_config(&self) -> Result<()> {
+        let json = serde_json::to_vec_pretty(&self.mcp).map_err(|e| ServiceError::Settings(e.to_string()))?;
+        self.write_private(MCP_FILE, &json)
+    }
+
+    pub fn mcp_config(&self) -> &McpConfig {
+        &self.mcp
+    }
+
+    /// Ändert Einstellungen des KI-Zugriffs. Das Token bleibt unverändert (siehe [`Service::new_mcp_token`]).
+    pub fn set_mcp_config(&mut self, enabled: bool, port: u16, write: bool, allow_personal: &[String]) -> Result<()> {
+        if port != 0 && port < 1024 {
+            return Err(ServiceError::Settings("Der Port muss mindestens 1024 sein".into()));
+        }
+        let mut allowed: Vec<String> = Vec::new();
+        for kind in allow_personal {
+            match schema::kind(kind) {
+                Some(def) if def.personal => {
+                    if !allowed.contains(kind) {
+                        allowed.push(kind.clone());
+                    }
+                }
+                _ => return Err(ServiceError::Settings(format!("„{kind}“ ist kein Typ mit Personenbezug"))),
+            }
+        }
+        self.mcp = McpConfig { enabled, port, write, allow_personal: allowed, token: self.mcp.token.clone() };
+        self.save_mcp_config()
+    }
+
+    /// Erzeugt ein neues Token. Clients mit dem alten Token verlieren den Zugriff.
+    pub fn new_mcp_token(&mut self) -> Result<()> {
+        self.mcp.token = McpConfig::new_token().map_err(|e| ServiceError::Settings(e.to_string()))?;
+        self.save_mcp_config()
+    }
+
+    /// Hängt einen Eintrag an das Protokoll des KI-Zugriffs an. Es enthält Werkzeug, Typ, ID und Feldnamen,
+    /// aber nie Feldinhalte.
+    pub fn audit(&self, entry: &Value) {
+        let path = self.dir.join(AUDIT_FILE);
+        if fs::metadata(&path).is_ok_and(|m| m.len() > AUDIT_MAX_BYTES) {
+            let _ = fs::rename(&path, self.dir.join(format!("{AUDIT_FILE}.1")));
+        }
+        let mut line = entry.to_string();
+        line.push('\n');
+        let opened = fs::OpenOptions::new().create(true).append(true).open(&path);
+        if let Ok(mut file) = opened {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            }
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+
+    /// Die letzten `n` Einträge des Protokolls, neueste zuletzt.
+    pub fn audit_tail(&self, n: usize) -> Vec<Value> {
+        let text = fs::read_to_string(self.dir.join(AUDIT_FILE)).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(n);
+        lines[start..].iter().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.dir
     }
 
     // ----- Zustand und Einstellungen ---------------------------------------------------------------------

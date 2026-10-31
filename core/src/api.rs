@@ -21,13 +21,18 @@
 //! | `save` | `{kind, id?, fields}` | `{id}` |
 //! | `delete` | `{id}` | |
 //! | `conflicts` | | Konflikte |
+//! | `mcp_get` | | Einstellungen des KI-Zugriffs und ob der Server läuft |
+//! | `mcp_set` | `{enabled, port, write, allow_personal}` | wie `mcp_get` |
+//! | `mcp_new_token` | | wie `mcp_get` |
+//! | `mcp_audit` | `{limit?}` | letzte Einträge des Protokolls |
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::crypto;
+use crate::mcp::McpServer;
 use crate::service::{Config, Service, ServiceError};
 use crate::sync::SyncError;
 
@@ -126,9 +131,147 @@ struct SaveArgs {
     fields: Map<String, Value>,
 }
 
+/// Die Anwendung: der Dienst und, wenn eingeschaltet, der laufende MCP-Server.
+pub struct App {
+    service: Arc<Mutex<Service>>,
+    /// Laufender Server und der Port, mit dem er angefordert wurde (0 = beliebig).
+    mcp: Mutex<Option<(McpServer, u16)>>,
+}
+
+impl App {
+    pub fn new(service: Service) -> Self {
+        Self { service: Arc::new(Mutex::new(service)), mcp: Mutex::new(None) }
+    }
+
+    pub fn service(&self) -> &Arc<Mutex<Service>> {
+        &self.service
+    }
+
+    /// Bringt den MCP-Server in den Zustand der gespeicherten Einstellungen: startet, hält an oder startet
+    /// bei geändertem Port neu. Token, Schreibstufe und Freigaben gelten ohne Neustart. Gibt die Adresse
+    /// zurück, wenn er läuft.
+    pub fn apply_mcp_config(&self) -> Result<Option<String>, ServiceError> {
+        let config = self
+            .service
+            .lock()
+            .map_err(|_| ServiceError::Settings("Interner Fehler: Sperre vergiftet".into()))?
+            .mcp_config()
+            .clone();
+        let mut running = self
+            .mcp
+            .lock()
+            .map_err(|_| ServiceError::Settings("Interner Fehler: Sperre vergiftet".into()))?;
+        if !config.enabled {
+            *running = None;
+            return Ok(None);
+        }
+        if let Some((server, requested)) = running.as_ref() {
+            if *requested == config.port {
+                return Ok(Some(server.url()));
+            }
+        }
+        // Den alten Server zuerst anhalten, damit der Port frei wird.
+        *running = None;
+        let mut last_error = None;
+        // Der Port wird erst frei, wenn der alte Server-Thread beendet ist: kurz erneut versuchen.
+        for _ in 0..40 {
+            match McpServer::spawn(Arc::clone(&self.service), config.port) {
+                Ok(server) => {
+                    let url = server.url();
+                    *running = Some((server, config.port));
+                    return Ok(Some(url));
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        Err(ServiceError::Settings(format!(
+            "Der KI-Zugriff konnte nicht gestartet werden (Port {}): {}",
+            config.port,
+            last_error.map(|e| e.to_string()).unwrap_or_default()
+        )))
+    }
+
+    /// Adresse des laufenden MCP-Servers.
+    pub fn mcp_url(&self) -> Option<String> {
+        self.mcp.lock().ok().and_then(|m| m.as_ref().map(|(server, _)| server.url()))
+    }
+
+    fn mcp_state(&self) -> ApiResult {
+        let config = self
+            .service
+            .lock()
+            .map_err(|_| ApiError::new("internal", "Interner Fehler: Sperre vergiftet"))?
+            .mcp_config()
+            .clone();
+        let url = self.mcp_url();
+        Ok(json!({
+            "enabled": config.enabled,
+            "port": config.port,
+            "token": config.token,
+            "write": config.write,
+            "allow_personal": config.allow_personal,
+            "running": url.is_some(),
+            "url": url,
+        }))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpSetArgs {
+    enabled: bool,
+    port: u16,
+    write: bool,
+    #[serde(default)]
+    allow_personal: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditArgs {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Befehle für den KI-Zugriff. `None`, wenn der Befehl nicht dazugehört.
+fn call_mcp(app: &App, command: &str, args: &Value) -> Option<ApiResult> {
+    let lock = || {
+        app.service
+            .lock()
+            .map_err(|_| ApiError::new("internal", "Interner Fehler: Sperre vergiftet"))
+    };
+    Some((|| match command {
+        "mcp_get" => app.mcp_state(),
+        "mcp_set" => {
+            let a: McpSetArgs = parse(args)?;
+            lock()?.set_mcp_config(a.enabled, a.port, a.write, &a.allow_personal)?;
+            app.apply_mcp_config()?;
+            app.mcp_state()
+        }
+        "mcp_new_token" => {
+            lock()?.new_mcp_token()?;
+            app.apply_mcp_config()?;
+            app.mcp_state()
+        }
+        "mcp_audit" => {
+            let a: AuditArgs = parse(args)?;
+            Ok(Value::Array(lock()?.audit_tail(a.limit.unwrap_or(50).min(200))))
+        }
+        _ => Err(ApiError::new("__not_mcp", "")),
+    })())
+    .filter(|r| !matches!(r, Err(e) if e.code == "__not_mcp"))
+}
+
 /// Führt einen Befehl aus. Der Dienst ist durch ein Mutex geschützt, es läuft immer nur ein Befehl.
-pub fn call(service: &Mutex<Service>, command: &str, args: &Value) -> ApiResult {
-    let mut service = service
+pub fn call(app: &App, command: &str, args: &Value) -> ApiResult {
+    if let Some(result) = call_mcp(app, command, args) {
+        return result;
+    }
+    let mut service = app
+        .service
         .lock()
         .map_err(|_| ApiError::new("internal", "Interner Fehler: Sperre vergiftet"))?;
     let none = || -> Result<(), ApiError> {
@@ -229,19 +372,19 @@ mod tests {
     const FAST: KdfParams = KdfParams { m_kib: 8, t: 1, p: 1 };
     const PASSWORD: &str = "korrekt pferd batterie heftklammer";
 
-    fn service() -> Mutex<Service> {
+    fn service() -> App {
         let mut bytes = [0u8; 6];
         getrandom::getrandom(&mut bytes).unwrap();
         let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let dir = std::env::temp_dir().join(format!("bdb-api-test-{name}"));
-        Mutex::new(Service::open(&dir, FAST).unwrap())
+        App::new(Service::open(&dir, FAST).unwrap())
     }
 
-    fn ok(s: &Mutex<Service>, cmd: &str, args: Value) -> Value {
+    fn ok(s: &App, cmd: &str, args: Value) -> Value {
         call(s, cmd, &args).unwrap_or_else(|e| panic!("{cmd}: {e:?}"))
     }
 
-    fn err(s: &Mutex<Service>, cmd: &str, args: Value) -> ApiError {
+    fn err(s: &App, cmd: &str, args: Value) -> ApiError {
         call(s, cmd, &args).expect_err(cmd)
     }
 
@@ -317,5 +460,105 @@ mod tests {
             json!({"server_url": "https://butler.example", "token": "abc", "attachments_dir": "/x"})
         );
         assert_eq!(ok(&s, "status", Value::Null)["configured"], true);
+    }
+
+    fn mcp_post(url: &str, token: &str, body: &str) -> (u16, String) {
+        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        match agent.post(url).header("Authorization", format!("Bearer {token}")).send(body) {
+            Ok(mut r) => (r.status().as_u16(), r.body_mut().read_to_string().unwrap_or_default()),
+            Err(_) => (0, String::new()),
+        }
+    }
+
+    #[test]
+    fn mcp_settings_are_validated_and_start_and_stop_the_server() {
+        let s = service();
+        let initial = ok(&s, "mcp_get", Value::Null);
+        assert_eq!((initial["enabled"].clone(), initial["running"].clone(), initial["write"].clone()), (json!(false), json!(false), json!(false)));
+        let token = initial["token"].as_str().unwrap().to_string();
+        assert_eq!(token.len(), 64);
+        assert_eq!(initial["allow_personal"], json!([]));
+
+        // Ungültige Einstellungen werden abgelehnt und ändern nichts.
+        assert_eq!(err(&s, "mcp_set", json!({"enabled": true, "port": 80, "write": false})).code, "settings");
+        assert_eq!(err(&s, "mcp_set", json!({"enabled": true, "port": 0, "write": false, "allow_personal": ["schule"]})).code, "settings");
+        assert_eq!(err(&s, "mcp_set", json!({"enabled": true, "port": 0, "write": false, "allow_personal": ["gibt-es-nicht"]})).code, "settings");
+        assert_eq!(err(&s, "mcp_set", json!({"enabled": true, "port": 0})).code, "bad_request");
+        assert_eq!(ok(&s, "mcp_get", Value::Null)["running"], false);
+
+        // Einschalten: Der Server läuft und antwortet mit dem Token.
+        let on = ok(&s, "mcp_set", json!({"enabled": true, "port": 0, "write": true, "allow_personal": ["ansprechpartner", "ansprechpartner"]}));
+        assert_eq!(on["running"], true);
+        assert_eq!(on["allow_personal"], json!(["ansprechpartner"]), "Doppelte Angaben entfallen");
+        assert_eq!(on["token"], json!(token), "Das Token bleibt beim Ändern der Einstellungen");
+        let url = on["url"].as_str().unwrap().to_string();
+        let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        assert_eq!(mcp_post(&url, &token, ping).0, 200);
+        assert_eq!(mcp_post(&url, "falsch", ping).0, 401);
+
+        // Aufrufe landen im Protokoll, ohne Inhalte.
+        ok(&s, "create_vault", json!({"password": PASSWORD}));
+        let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_record","arguments":{"kind":"schule","fields":{"name":"Vertrauliche Schule"}}}}"#;
+        let (status, body) = mcp_post(&url, &token, call);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"isError\":false"), "{body}");
+        let audit = ok(&s, "mcp_audit", json!({"limit": 10}));
+        assert_eq!(audit[0]["tool"], "create_record");
+        assert!(!audit.to_string().contains("Vertrauliche"));
+        assert_eq!(ok(&s, "list", json!({"kind": "schule"}))[0]["fields"]["name"], "Vertrauliche Schule");
+
+        // Neues Token: das alte verliert den Zugriff, der Server läuft weiter.
+        let renewed = ok(&s, "mcp_new_token", Value::Null);
+        let new_token = renewed["token"].as_str().unwrap().to_string();
+        assert_ne!(new_token, token);
+        assert_eq!(renewed["running"], true);
+        let new_url = renewed["url"].as_str().unwrap().to_string();
+        assert_eq!(mcp_post(&new_url, &token, ping).0, 401);
+        assert_eq!(mcp_post(&new_url, &new_token, ping).0, 200);
+
+        // Ausschalten.
+        let off = ok(&s, "mcp_set", json!({"enabled": false, "port": 0, "write": false, "allow_personal": []}));
+        assert_eq!((off["running"].clone(), off["url"].clone()), (json!(false), Value::Null));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(mcp_post(&new_url, &new_token, ping).0, 0, "ausgeschalteter Server antwortet nicht");
+    }
+
+    #[test]
+    fn mcp_settings_survive_a_restart() {
+        let mut bytes = [0u8; 6];
+        getrandom::getrandom(&mut bytes).unwrap();
+        let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let dir = std::env::temp_dir().join(format!("bdb-api-mcp-{name}"));
+        let first = App::new(Service::open(&dir, FAST).unwrap());
+        ok(&first, "mcp_set", json!({"enabled": false, "port": 9123, "write": true, "allow_personal": ["ansprechpartner"]}));
+        let token = ok(&first, "mcp_get", Value::Null)["token"].clone();
+        drop(first);
+
+        let second = App::new(Service::open(&dir, FAST).unwrap());
+        let state = ok(&second, "mcp_get", Value::Null);
+        assert_eq!(state["port"], 9123);
+        assert_eq!(state["write"], true);
+        assert_eq!(state["allow_personal"], json!(["ansprechpartner"]));
+        assert_eq!(state["token"], token);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("mcp.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "mcp.json enthält das Token und darf nur dem Nutzer gehören");
+        }
+    }
+
+    #[test]
+    fn busy_port_is_reported() {
+        let s = service();
+        let blocker = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = blocker.local_addr().unwrap().port();
+        if port < 1024 {
+            return;
+        }
+        let e = err(&s, "mcp_set", json!({"enabled": true, "port": port, "write": false}));
+        assert_eq!(e.code, "settings");
+        assert!(e.message.contains(&port.to_string()));
+        assert_eq!(ok(&s, "mcp_get", Value::Null)["running"], false);
     }
 }

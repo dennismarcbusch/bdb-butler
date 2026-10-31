@@ -8,7 +8,7 @@ Anforderungen: `docs/ANFORDERUNGEN.md`. Architektur und Entscheidungen: `docs/AR
 
 ## Aufbau
 
-- `core/`: Rust-Bibliothek `bdb-core` (Krypto, Einträge, lokale Datenbank, Sync-Client, Dienstschicht `service`, JSON-Schnittstelle `api`, Typdefinitionen `schema`; später MCP-Server). Tests: `cargo test -p bdb-core` (der Integrationstest baut und startet den Go-Server, dafür muss Go installiert sein).
+- `core/`: Rust-Bibliothek `bdb-core` (Krypto, Einträge, lokale Datenbank, Sync-Client, Dienstschicht `service`, JSON-Schnittstelle `api`, Typdefinitionen `schema`, lokaler MCP-Server `mcp`). Tests: `cargo test -p bdb-core` (der Integrationstest baut und startet den Go-Server, dafür muss Go installiert sein).
 - `server/`: Go-Sync-Server für Chiffretext. Tests: `go test -race ./...` im Ordner `server/`.
 - `app/`: Tauri-App. `app/src-tauri` ist die Rust-Hülle (ein Befehl `call` reicht alles an `bdb_core::api::call` weiter), `app/src` die Oberfläche (Preact, TypeScript, Vite). Im Browser spricht die Oberfläche über die Entwicklungsbrücke `dev_bridge` mit dem Kern. Tests: `npm test` (Einheiten), `npm run typecheck`, `npm run e2e` (Browser gegen Kern und Go-Server, braucht Chromium und Go).
 - `dienstreisebuster/`: Bestandstool (Django), wird durch das Dienstreisemodul der App abgelöst. Der Name entfällt; der Ordner wird mit dem Dienstreisemodul ersetzt.

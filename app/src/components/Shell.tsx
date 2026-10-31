@@ -138,7 +138,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
           <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />
         )}
         {view === 'settings' && (
-          <Settings configured={configured} sync={sync} onSync={() => void runSync()} onStatusChanged={onStatusChanged} />
+          <Settings kinds={kinds} configured={configured} sync={sync} onSync={() => void runSync()} onStatusChanged={onStatusChanged} />
         )}
       </main>
     </div>

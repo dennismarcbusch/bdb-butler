@@ -42,6 +42,26 @@ export interface Config {
   attachments_dir: string;
 }
 
+export interface McpState {
+  enabled: boolean;
+  port: number;
+  token: string;
+  write: boolean;
+  allow_personal: string[];
+  running: boolean;
+  url: string | null;
+}
+
+export interface AuditEntry {
+  t: number;
+  tool: string;
+  kind?: string;
+  id?: string;
+  fields?: string[];
+  ok: boolean;
+  error?: string;
+}
+
 export interface SyncReport {
   pulled: number;
   pushed: number;
