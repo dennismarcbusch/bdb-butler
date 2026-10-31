@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { api } from '../api';
 import { messageOf } from '../errors';
+import { dueLabel, dueState, filterOrders, todayIso, type OrderFilter } from '../auftrag';
 import { matches, titleOf } from '../form';
 import type { KindDef, RecordView } from '../types';
 import { RecordForm } from './RecordForm';
@@ -16,12 +17,23 @@ interface Props {
   onNavigate: (kind: string, id: string) => void;
 }
 
+const FILTERS: { id: OrderFilter; label: string }[] = [
+  { id: 'open', label: 'Offen' },
+  { id: 'all', label: 'Alle' },
+  { id: 'done', label: 'Erledigt' },
+];
+
 /** Liste mit Suche und Formular für einen Typ. */
 export function KindView({ kind, kinds, revision, initialSelected = null, onChanged, onNavigate }: Props) {
   const [records, setRecords] = useState<RecordView[]>([]);
   const [selected, setSelected] = useState<string | 'new' | null>(initialSelected);
   const [query, setQuery] = useState('');
+  const [orderFilter, setOrderFilter] = useState<OrderFilter>('open');
   const [error, setError] = useState<string | null>(null);
+  // Zählt lokale Änderungen, damit „Verknüpfte Einträge“ danach neu lädt (nicht nur nach einem Abgleich).
+  const [localChanges, setLocalChanges] = useState(0);
+  const isOrders = kind.kind === 'auftrag';
+  const today = todayIso();
 
   const load = useCallback(async () => {
     try {
@@ -36,7 +48,7 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
     void load();
   }, [load, revision]);
 
-  const visible = records.filter((r) => matches(r, query));
+  const visible = (isOrders ? filterOrders(records, orderFilter) : records).filter((r) => matches(r, query));
   const current = selected && selected !== 'new' ? (records.find((r) => r.id === selected) ?? null) : null;
 
   return (
@@ -46,6 +58,15 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
           <h2>{kind.label_plural}</h2>
           <button type="button" class="primary" onClick={() => setSelected('new')}>{kind.label} anlegen</button>
         </div>
+        {isOrders && (
+          <div class="tabs small filter" role="group" aria-label="Aufträge filtern">
+            {FILTERS.map((f) => (
+              <button key={f.id} type="button" aria-pressed={orderFilter === f.id} class={orderFilter === f.id ? 'active' : ''} onClick={() => setOrderFilter(f.id)}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        )}
         <input type="search" placeholder="Suchen …" aria-label="Suchen" value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
         {error && <p class="error" role="alert">{error}</p>}
         <ul>
@@ -53,6 +74,12 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             <li key={r.id}>
               <button type="button" class={selected === r.id ? 'active' : ''} onClick={() => setSelected(r.id)}>
                 {titleOf(kind, r)}
+                {isOrders && (
+                  <span class={`meta due-${dueState(r, today)}`}>
+                    {dueLabel(r, today)}
+                    {typeof r.fields.status === 'string' && r.fields.status !== 'Erledigt' ? ` · ${r.fields.status}` : ''}
+                  </span>
+                )}
               </button>
             </li>
           ))}
@@ -70,19 +97,26 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             record={current}
             onSaved={(id) => {
               setSelected(id);
+              setLocalChanges((n) => n + 1);
               void load();
               onChanged();
             }}
             onDeleted={() => {
               setSelected(null);
+              setLocalChanges((n) => n + 1);
               void load();
               onChanged();
             }}
             onCancel={() => setSelected(null)}
             onNavigate={onNavigate}
+            onOrdersChanged={() => {
+              setLocalChanges((n) => n + 1);
+              void load();
+              onChanged();
+            }}
           />
         )}
-        {current && <RelatedList kinds={kinds} recordId={current.id} revision={revision} onOpen={onNavigate} />}
+        {current && <RelatedList kinds={kinds} recordId={current.id} revision={revision + localChanges} onOpen={onNavigate} />}
       </section>
     </div>
   );

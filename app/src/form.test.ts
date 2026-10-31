@@ -16,6 +16,7 @@ const kind: KindDef = {
     { name: 'anzahl', label: 'Anzahl', type: 'number', required: false },
     { name: 'aktiv', label: 'Aktiv', type: 'bool', required: false },
     { name: 'art', label: 'Art', type: 'choice', options: ['a', 'b'], required: false },
+    { name: 'status', label: 'Status', type: 'choice', options: ['Offen', 'Erledigt'], required: true, default: 'Offen' },
     { name: 'schule', label: 'Schule', type: 'ref', kind: 'schule', required: false },
     { name: 'kontakte', label: 'Kontakte', type: 'ref_list', kind: 'x', required: false },
   ],
@@ -25,7 +26,7 @@ const record = (fields: RecordView['fields']): RecordView => ({ id: 'r1', kind: 
 
 describe('Formularwerte', () => {
   it('beginnt leer', () => {
-    expect(emptyValues(kind)).toEqual({ name: '', notizen: '', anzahl: '', aktiv: false, art: '', schule: '', kontakte: [] });
+    expect(emptyValues(kind)).toEqual({ name: '', notizen: '', anzahl: '', aktiv: false, art: '', status: 'Offen', schule: '', kontakte: [] });
   });
 
   it('liest einen Eintrag ins Formular', () => {
@@ -42,7 +43,7 @@ describe('Formularwerte', () => {
 describe('Nutzlast für den Kern', () => {
   it('macht leere Eingaben zu null, damit Felder geleert werden', () => {
     expect(toPayload(kind, emptyValues(kind))).toEqual({
-      name: null, notizen: null, anzahl: null, aktiv: false, art: null, schule: null, kontakte: null,
+      name: null, notizen: null, anzahl: null, aktiv: false, art: null, status: 'Offen', schule: null, kontakte: null,
     });
   });
 

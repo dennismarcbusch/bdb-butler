@@ -5,6 +5,7 @@ import { messageOf } from '../errors';
 import { emptyValues, toPayload, titleOf, valuesFromRecord, type FormValue, type FormValues } from '../form';
 import { titleIndex } from '../graph';
 import type { FieldDef, KindDef, RecordView } from '../types';
+import { useProtocolOrders } from '../useProtocolOrders';
 import { MarkdownField } from './MarkdownField';
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   onDeleted: () => void;
   onCancel: () => void;
   onNavigate: (kind: string, id: string) => void;
+  /// Aufträge wurden angelegt (Listen und Zähler neu laden).
+  onOrdersChanged?: () => void;
 }
 
 interface Option {
@@ -22,7 +25,7 @@ interface Option {
   title: string;
 }
 
-export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, onNavigate }: Props) {
+export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, onNavigate, onOrdersChanged }: Props) {
   const [values, setValues] = useState<FormValues>(() => (record ? valuesFromRecord(kind, record) : emptyValues(kind)));
   const [options, setOptions] = useState<Record<string, Option[]>>({});
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +37,17 @@ export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, 
   useEffect(() => {
     if (hasMarkdown) api.listAll().then(setAll, () => undefined);
   }, [hasMarkdown]);
+  // Aufträge aus Protokollen (nur bei Protokollen).
+  const isProtocol = kind.kind === 'protokoll';
+  const orders = useProtocolOrders(isProtocol ? record : null, () => onOrdersChanged?.());
+  const createOrder = async (text: string) => {
+    setError(null);
+    try {
+      await orders.create(text);
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  };
   const resolve = useMemo(() => {
     const index = titleIndex(all, kinds);
     const byId = new Map(all.map((r) => [r.id, r]));
@@ -109,6 +123,37 @@ export function RecordForm({ kind, kinds, record, onSaved, onDeleted, onCancel, 
             onChange={(v) => set(field.name, v)}
             resolve={resolve}
             onOpen={(target) => onNavigate(target.kind, target.id)}
+            taskAction={
+              isProtocol
+                ? (task) => {
+                    const found = orders.find(task.text);
+                    return found ? (
+                      <button type="button" class="link small" onClick={() => onNavigate('auftrag', found.id)}>
+                        Auftrag öffnen
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        class="small"
+                        disabled={!record}
+                        title={record ? undefined : 'Das Protokoll zuerst speichern'}
+                        onClick={() => void createOrder(task.text)}
+                      >
+                        Auftrag anlegen
+                      </button>
+                    );
+                  }
+                : undefined
+            }
+            selectionAction={
+              isProtocol
+                ? {
+                    label: 'Auftrag aus Markierung anlegen',
+                    disabledReason: record ? undefined : 'Das Protokoll zuerst speichern',
+                    run: createOrder,
+                  }
+                : undefined
+            }
           />
         ) : (
           <Field key={field.name} field={field} value={values[field.name]} options={refOptions(field, options)} onChange={(v) => set(field.name, v)} />

@@ -10,6 +10,8 @@ export function emptyValue(field: FieldDef): FormValue {
       return false;
     case 'ref_list':
       return [];
+    case 'choice':
+      return field.default ?? '';
     default:
       return '';
   }

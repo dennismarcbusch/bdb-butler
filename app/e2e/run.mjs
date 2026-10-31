@@ -572,6 +572,106 @@ async function main() {
       await shot(page, '14-graph-protokoll');
     });
 
+    await step('Auftragsbuch: Fristen, Filter, Abzeichen, Aufträge aus Protokollen', async () => {
+      const isoDay = (offset) => {
+        const d = new Date();
+        d.setDate(d.getDate() + offset);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+      const nav = (name) => page.getByRole('navigation').getByRole('button', { name, exact: false }).first().click();
+      const book = page.getByRole('region', { name: 'Auftragsbuch' });
+
+      await nav('Auftragsbuch');
+      const create = async (fields) => {
+        await page.getByRole('button', { name: 'Auftrag anlegen' }).click();
+        assert.equal(await page.getByLabel('Status *').inputValue(), 'Offen', 'Status ist vorbelegt');
+        await page.getByLabel('Titel *').fill(fields.titel);
+        if (fields.auftraggeber) await page.getByLabel('Auftraggeber').selectOption(fields.auftraggeber);
+        if (fields.frist) await page.getByLabel('Frist', { exact: true }).fill(fields.frist);
+        await page.getByRole('button', { name: 'Speichern' }).click();
+        await page.getByRole('heading', { name: fields.titel }).waitFor();
+      };
+      await create({ titel: 'Zweiter Auftrag ohne Frist' });
+      await create({ titel: 'Konzept überarbeiten', auftraggeber: 'Sachgebietsleitung', frist: isoDay(3) });
+      await create({ titel: 'Bericht an das Ministerium', auftraggeber: 'Ministerium', frist: isoDay(-1) });
+
+      // Nach Frist sortiert, überfällig zuerst, ohne Frist zuletzt.
+      const items = await book.locator('li button').allInnerTexts();
+      assert.equal(items.length, 3);
+      assert.match(items[0], /Bericht an das Ministerium[\s\S]*überfällig seit 1 Tag/);
+      assert.match(items[1], /Konzept überarbeiten[\s\S]*fällig in 3 Tagen/);
+      assert.match(items[2], /Zweiter Auftrag ohne Frist[\s\S]*ohne Frist/);
+      await shot(page, '16-auftragsbuch');
+      await page.getByRole('navigation').getByRole('button', { name: /Auftragsbuch \(1 überfällig\)/ }).waitFor();
+
+      // Erledigen: verschwindet aus „Offen“, steht unter „Erledigt“ und das Abzeichen verschwindet.
+      await book.getByRole('button', { name: /Bericht an das Ministerium/ }).click();
+      await page.getByLabel('Status *').selectOption('Erledigt');
+      await page.getByLabel('Erledigt am').fill(isoDay(0));
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Bericht an das Ministerium' }).waitFor();
+      // Erledigte Aufträge sind unter „Offen“ ausgeblendet (die Liste lädt nach dem Speichern neu).
+      await book.locator('li button', { hasText: 'Bericht an das Ministerium' }).waitFor({ state: 'detached' });
+      await page.getByRole('navigation').getByRole('button', { name: /^Auftragsbuch$/ }).waitFor();
+      await book.getByRole('button', { name: 'Erledigt', exact: true }).click();
+      await book.locator('li button', { hasText: 'Bericht an das Ministerium' }).waitFor();
+      assert.match(await book.locator('li button').first().innerText(), /erledigt am/);
+      await book.getByRole('button', { name: 'Alle', exact: true }).click();
+      assert.equal(await book.locator('li button').count(), 3);
+      await book.getByRole('button', { name: 'Offen', exact: true }).click();
+
+      // Aufträge aus dem Protokoll: Schule am Protokoll setzen, offene Aufgaben ergänzen.
+      await nav('Protokolle');
+      await page.getByRole('button', { name: 'Beratung Tablets' }).click();
+      await page.getByLabel('Schule', { exact: true }).selectOption({ label: 'Grundschule am See' });
+      const textbox = page.getByRole('textbox', { name: 'Protokoll (Markdown)' });
+      await textbox.fill('# Ergebnis\n- [ ] Rückmeldung an die Schule schicken\n- [ ] Fortbildung beantragen\n- [x] Termin vereinbart\n\nHier steht ein Satz, der zum Auftrag werden soll.');
+      await page.getByRole('button', { name: 'Speichern' }).click();
+      await page.getByRole('heading', { name: 'Beratung Tablets' }).waitFor();
+
+      await page.getByRole('tab', { name: 'Vorschau' }).click();
+      const preview = page.getByLabel('Protokoll (Markdown): Vorschau');
+      // Nur offene und erledigte Aufgaben haben eine Schaltfläche: drei Aufgaben, drei Schaltflächen.
+      assert.equal(await preview.getByRole('button', { name: 'Auftrag anlegen' }).count(), 3);
+      await preview.locator('li', { hasText: 'Rückmeldung an die Schule schicken' }).getByRole('button', { name: 'Auftrag anlegen' }).click();
+      await preview.locator('li', { hasText: 'Rückmeldung an die Schule schicken' }).getByRole('button', { name: 'Auftrag öffnen' }).waitFor();
+      assert.equal(await preview.getByRole('button', { name: 'Auftrag anlegen' }).count(), 2, 'ein zweites Anlegen ist nicht möglich');
+      await page.locator('.related').getByRole('button', { name: 'Rückmeldung an die Schule schicken' }).waitFor();
+
+      // Der Auftrag kennt Protokoll, Schule und Datum.
+      await preview.getByRole('button', { name: 'Auftrag öffnen' }).click();
+      await page.getByRole('heading', { name: 'Rückmeldung an die Schule schicken' }).waitFor();
+      assert.equal(await page.getByLabel('Status *').inputValue(), 'Offen');
+      assert.equal(await page.getByLabel('Erteilt am').inputValue(), '2026-10-30');
+      assert.equal(await page.getByLabel('Aus Protokoll').evaluate((el) => el.selectedOptions[0].textContent), 'Beratung Tablets');
+      assert.equal(await page.getByLabel('Schule', { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), 'Grundschule am See');
+      await shot(page, '17-auftrag-aus-protokoll');
+
+      // Auftrag aus markiertem Text.
+      await nav('Protokolle');
+      await page.getByRole('button', { name: 'Beratung Tablets' }).click();
+      const box = page.getByRole('textbox', { name: 'Protokoll (Markdown)' });
+      const selectionButton = page.getByRole('button', { name: 'Auftrag aus Markierung anlegen' });
+      assert.equal(await selectionButton.isDisabled(), true, 'ohne Markierung gesperrt');
+      await box.evaluate((el) => {
+        const needle = 'ein Satz, der zum Auftrag werden soll';
+        const start = el.value.indexOf(needle);
+        el.focus();
+        el.setSelectionRange(start, start + needle.length);
+        el.dispatchEvent(new Event('select', { bubbles: true }));
+      });
+      await selectionButton.click();
+      await page.locator('.related').getByRole('button', { name: 'ein Satz, der zum Auftrag werden soll' }).waitFor();
+      const orders = await bridgeCall(bridgeA, 'list', { kind: 'auftrag' });
+      assert.ok(orders.some((o) => o.fields.titel === 'ein Satz, der zum Auftrag werden soll'));
+      assert.equal(orders.filter((o) => o.fields.protokoll).length, 2);
+
+      // Der Graph verbindet Aufträge mit ihrem Protokoll.
+      await nav('Graph');
+      await page.getByRole('button', { name: 'Auftrag: Rückmeldung an die Schule schicken' }).click();
+      await page.getByRole('complementary', { name: 'Auswahl' }).getByRole('button', { name: /Beratung Tablets/ }).waitFor();
+    });
+
     await step('Protokolltext: gleichzeitige Änderung ergibt eine Konfliktkopie, nichts geht verloren', async () => {
       await bridgeCall(bridgeA, 'sync');
       await bridgeCall(bridgeB, 'sync');

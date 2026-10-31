@@ -12,7 +12,7 @@ export type FieldType =
   | { type: 'ref'; kind: string }
   | { type: 'ref_list'; kind: string };
 
-export type FieldDef = FieldType & { name: string; label: string; required: boolean };
+export type FieldDef = FieldType & { name: string; label: string; required: boolean; default?: string };
 
 export interface KindDef {
   kind: string;

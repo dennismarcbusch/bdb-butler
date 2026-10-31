@@ -119,3 +119,9 @@ Begründung für das eigene Sync-Protokoll: Es gibt genau einen Nutzer und wenig
 - Aufgaben lassen sich in der Vorschau abhaken, das ändert den Quelltext.
 - Gleichzeitige Änderungen am Protokolltext zweier Rechner ergeben einen Konflikteintrag mit beiden Fassungen (siehe „Konflikte“). Der Nutzer kann die andere Fassung mit einem Klick übernehmen.
 - Formulare verbinden Beschriftung und Eingabefeld über `for` und `id`. Ein umschließendes Label würde bei Auswahlfeldern den Text aller Optionen in den Namen des Feldes aufnehmen.
+
+## Auftragsbuch
+
+- Typ `auftrag` (`core/src/schema.rs`): Titel, Auftraggeber (Ministerium, Sachgebietsleitung, Schulleitung, Sonstige), Status (Offen, In Arbeit, Wartet, Erledigt; Vorgabe „Offen“), Erteilt am, Frist, Erledigt am, Schule, Verweis auf das Protokoll, Beschreibung (Markdown). Auswahlfelder können einen Vorgabewert haben, der beim Anlegen gilt, wenn das Feld fehlt. Dadurch kann auch die KI Aufträge ohne Status anlegen.
+- Die Liste ist nach Frist sortiert, Einträge ohne Sortierwert stehen am Ende. Filter: Offen (Standard), Alle, Erledigt. Jeder Eintrag zeigt die Fälligkeit in Worten („überfällig seit 3 Tagen“, „fällig in 2 Tagen“). Ein Abzeichen in der Navigation zählt überfällige offene Aufträge. Die Fristberechnung (`app/src/auftrag.ts`) ist eine reine Funktion des übergebenen Datums und deshalb testbar.
+- **Aufträge aus Protokollen:** Jede Aufgabe (`- [ ] Text`) im Protokolltext hat die Schaltfläche „Auftrag anlegen“. Im Bearbeiten-Modus legt „Auftrag aus Markierung anlegen“ einen Auftrag aus markiertem Text an. Der Auftrag verweist auf das Protokoll und übernimmt dessen Schule und Datum (als „Erteilt am“). Ein Auftrag mit gleichem Titel aus demselben Protokoll wird nicht doppelt angelegt, stattdessen erscheint „Auftrag öffnen“. Das Protokoll muss dafür gespeichert sein. Aufträge sind nicht personenbezogen und damit auch für die KI zugänglich.

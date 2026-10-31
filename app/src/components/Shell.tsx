@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../api';
+import { overdueCount, todayIso } from '../auftrag';
 import { messageOf } from '../errors';
 import type { KindDef, RecordView } from '../types';
 import { useSync } from '../useSync';
@@ -22,11 +23,13 @@ export function Shell({ configured, onStatusChanged }: Props) {
   // Eintrag, der beim Wechsel in eine Typansicht ausgewählt werden soll. `nonce` erzwingt ein Neuladen.
   const [focus, setFocus] = useState<{ kind: string; id: string; nonce: number } | null>(null);
   const [conflicts, setConflicts] = useState<RecordView[]>([]);
+  const [overdue, setOverdue] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const { state: sync, run: runSync, schedule } = useSync(configured);
 
   const loadConflicts = useCallback(async () => {
     try {
+      setOverdue(overdueCount(await api.list('auftrag'), todayIso()));
       setConflicts(await api.conflicts());
     } catch (e) {
       setError(messageOf(e));
@@ -90,6 +93,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
           {kinds.map((k) => (
             <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
               {k.label_plural}
+              {k.kind === 'auftrag' && overdue > 0 ? ` (${overdue} überfällig)` : ''}
             </button>
           ))}
           <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>

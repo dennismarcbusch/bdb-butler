@@ -482,6 +482,15 @@ impl Service {
             normalized.push((field.name, value));
         }
         if existing.is_none() {
+            // Vorgabewerte gelten nur, wenn das Feld beim Anlegen gar nicht angegeben wurde. Eine ausdrücklich
+            // geleerte Pflichtangabe bleibt ein Fehler (oben geprüft).
+            for field in &def.fields {
+                if let Some(default) = field.default {
+                    if !values.contains_key(field.name) {
+                        normalized.push((field.name, Value::String(default.to_string())));
+                    }
+                }
+            }
             for field in def.fields.iter().filter(|f| f.required) {
                 if !normalized.iter().any(|(n, v)| *n == field.name && !v.is_null()) {
                     return Err(ServiceError::Invalid(format!("{} ist ein Pflichtfeld", field.label)));
@@ -537,8 +546,17 @@ impl Service {
 fn sort_views(def: &KindDef, views: &mut [RecordView]) {
     let text = |v: &RecordView, field: &str| v.fields.get(field).and_then(Value::as_str).unwrap_or("").to_lowercase();
     views.sort_by(|a, b| {
-        let primary = text(a, def.sort_field).cmp(&text(b, def.sort_field));
-        let primary = if def.sort_desc { primary.reverse() } else { primary };
+        let (ka, kb) = (text(a, def.sort_field), text(b, def.sort_field));
+        // Einträge ohne Sortierwert (zum Beispiel ohne Frist) stehen immer am Ende.
+        let primary = match (ka.is_empty(), kb.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => {
+                let ord = ka.cmp(&kb);
+                if def.sort_desc { ord.reverse() } else { ord }
+            }
+        };
         primary.then_with(|| text(a, def.title_field).cmp(&text(b, def.title_field)))
     });
 }
@@ -765,6 +783,28 @@ mod tests {
         }
         let themen: Vec<_> = s.list("beratung").unwrap().iter().map(|v| v.fields["thema"].as_str().unwrap().to_string()).collect();
         assert_eq!(themen, ["Neueste", "Alpha", "Beta", "Älteste"]);
+    }
+
+    #[test]
+    fn orders_get_default_status_and_sort_by_deadline_with_open_ones_last() {
+        let (mut s, _) = unlocked_service();
+        let spaet = s.save("auftrag", None, &map(json!({"titel": "Später", "frist": "2026-12-01"}))).unwrap();
+        s.save("auftrag", None, &map(json!({"titel": "Ohne Frist"}))).unwrap();
+        s.save("auftrag", None, &map(json!({"titel": "Zuerst", "frist": "2026-11-05", "status": "In Arbeit", "auftraggeber": "Ministerium"}))).unwrap();
+
+        // Der Status fehlt bei zwei Aufträgen: Vorgabe „Offen“.
+        assert_eq!(s.get(&spaet).unwrap().fields["status"], "Offen");
+        let titel: Vec<_> = s.list("auftrag").unwrap().iter().map(|v| v.fields["titel"].as_str().unwrap().to_string()).collect();
+        assert_eq!(titel, ["Zuerst", "Später", "Ohne Frist"], "ohne Frist steht am Ende");
+
+        // Ein ausdrücklich geleerter Status ist ein Fehler, ein ungültiger auch.
+        assert!(matches!(s.save("auftrag", None, &map(json!({"titel": "X", "status": ""}))), Err(ServiceError::Invalid(_))));
+        assert!(matches!(s.save("auftrag", None, &map(json!({"titel": "X", "status": "Vielleicht"}))), Err(ServiceError::Invalid(_))));
+        // Beim Ändern gilt keine Vorgabe: der Status bleibt, wie er ist.
+        s.save("auftrag", Some(&spaet), &map(json!({"titel": "Später, geändert"}))).unwrap();
+        assert_eq!(s.get(&spaet).unwrap().fields["status"], "Offen");
+        s.save("auftrag", Some(&spaet), &map(json!({"status": "Erledigt", "erledigt_am": "2026-10-31"}))).unwrap();
+        assert_eq!(s.get(&spaet).unwrap().fields["status"], "Erledigt");
     }
 
     #[test]

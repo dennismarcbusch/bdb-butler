@@ -33,6 +33,9 @@ pub struct FieldDef {
     #[serde(flatten)]
     pub field_type: FieldType,
     pub required: bool,
+    /// Vorgabewert (nur für Auswahlfelder): gilt beim Anlegen, wenn das Feld fehlt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,39 +55,44 @@ pub struct KindDef {
 }
 
 const fn text(name: &'static str, label: &'static str, required: bool) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Text, required }
+    FieldDef { name, label, field_type: FieldType::Text, required, default: None }
 }
 
 const fn long_text(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::LongText, required: false }
+    FieldDef { name, label, field_type: FieldType::LongText, required: false, default: None }
 }
 
 const fn markdown(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Markdown, required: false }
+    FieldDef { name, label, field_type: FieldType::Markdown, required: false, default: None }
 }
 
 const fn date(name: &'static str, label: &'static str, required: bool) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Date, required }
+    FieldDef { name, label, field_type: FieldType::Date, required, default: None }
 }
 
 const fn number(name: &'static str, label: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Number, required: false }
+    FieldDef { name, label, field_type: FieldType::Number, required: false, default: None }
 }
 
 const fn choice(name: &'static str, label: &'static str, options: &'static [&'static str]) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Choice { options }, required: false }
+    FieldDef { name, label, field_type: FieldType::Choice { options }, required: false, default: None }
 }
 
 const fn reference(name: &'static str, label: &'static str, kind: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::Ref { kind }, required: false }
+    FieldDef { name, label, field_type: FieldType::Ref { kind }, required: false, default: None }
 }
 
 const fn reference_list(name: &'static str, label: &'static str, kind: &'static str) -> FieldDef {
-    FieldDef { name, label, field_type: FieldType::RefList { kind }, required: false }
+    FieldDef { name, label, field_type: FieldType::RefList { kind }, required: false, default: None }
 }
 
 const fn required(mut def: FieldDef) -> FieldDef {
     def.required = true;
+    def
+}
+
+const fn with_default(mut def: FieldDef, value: &'static str) -> FieldDef {
+    def.default = Some(value);
     def
 }
 
@@ -103,6 +111,11 @@ pub const SCHULARTEN: &[&str] = &[
 pub const BERATUNGSARTEN: &[&str] = &["Vor Ort", "Online", "Telefon", "Schriftlich"];
 
 pub const PROTOKOLLARTEN: &[&str] = &["Beratung", "Jour fixe", "Dienstbesprechung", "Sonstiges"];
+
+pub const AUFTRAGGEBER: &[&str] = &["Ministerium", "Sachgebietsleitung", "Schulleitung", "Sonstige"];
+
+/// Zustände eines Auftrags. „Erledigt“ ist der einzige abgeschlossene Zustand.
+pub const AUFTRAGSSTATUS: &[&str] = &["Offen", "In Arbeit", "Wartet", "Erledigt"];
 
 pub const ROLLEN: &[&str] = &[
     "Schulleitung",
@@ -209,6 +222,26 @@ pub fn kinds() -> Vec<KindDef> {
                 reference("schule", "Schule", "schule"),
                 reference("beratung", "Beratung", "beratung"),
                 markdown("text", "Protokoll (Markdown)"),
+            ],
+        },
+        KindDef {
+            kind: "auftrag",
+            label: "Auftrag",
+            label_plural: "Auftragsbuch",
+            title_field: "titel",
+            sort_field: "frist",
+            sort_desc: false,
+            personal: false,
+            fields: vec![
+                text("titel", "Titel", true),
+                choice("auftraggeber", "Auftraggeber", AUFTRAGGEBER),
+                required(with_default(choice("status", "Status", AUFTRAGSSTATUS), "Offen")),
+                date("erteilt_am", "Erteilt am", false),
+                date("frist", "Frist", false),
+                date("erledigt_am", "Erledigt am", false),
+                reference("schule", "Schule", "schule"),
+                reference("protokoll", "Aus Protokoll", "protokoll"),
+                markdown("beschreibung", "Beschreibung"),
             ],
         },
     ]
@@ -380,7 +413,7 @@ mod tests {
     use serde_json::json;
 
     fn def(field_type: FieldType) -> FieldDef {
-        FieldDef { name: "f", label: "Feld", field_type, required: false }
+        FieldDef { name: "f", label: "Feld", field_type, required: false, default: None }
     }
 
     #[test]
@@ -408,6 +441,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn defaults_are_valid_options() {
+        for k in kinds() {
+            for f in &k.fields {
+                if let Some(d) = f.default {
+                    match &f.field_type {
+                        FieldType::Choice { options } => assert!(options.contains(&d), "{}.{}: Vorgabe „{d}“ ist keine Option", k.kind, f.name),
+                        _ => panic!("{}.{}: Vorgaben gibt es nur für Auswahlfelder", k.kind, f.name),
+                    }
+                }
+            }
+        }
+        let status = kind("auftrag").unwrap().fields.into_iter().find(|f| f.name == "status").unwrap();
+        assert_eq!((status.required, status.default), (true, Some("Offen")));
     }
 
     #[test]

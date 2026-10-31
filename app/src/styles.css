@@ -188,3 +188,14 @@ textarea.markdown-source { font-family: ui-monospace, 'Cascadia Mono', Menlo, mo
 .markdown a { color: var(--accent); }
 button.wikilink { border: none; background: none; color: var(--accent); padding: 0; text-decoration: underline dotted; cursor: pointer; font: inherit; }
 span.wikilink.missing { color: var(--danger); text-decoration: underline dotted; cursor: help; }
+
+:root { --warn: #b26a00; }
+@media (prefers-color-scheme: dark) { :root { --warn: #f0b24c; } }
+.list li button .meta { display: block; font-size: 0.8rem; color: var(--muted); }
+.list li button.active .meta { color: inherit; opacity: 0.9; }
+.meta.due-overdue { color: var(--danger); font-weight: 600; }
+.meta.due-today, .meta.due-soon { color: var(--warn); }
+.list li button.active .meta.due-overdue, .list li button.active .meta.due-today, .list li button.active .meta.due-soon { color: inherit; font-weight: 600; }
+.tabs.filter { margin: 0.4rem 0 0.6rem; }
+button.small { padding: 0.1rem 0.5rem; font-size: 0.8rem; margin-left: 0.6rem; }
+button.link.small { border: none; }
