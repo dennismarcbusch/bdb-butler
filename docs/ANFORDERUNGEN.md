@@ -90,4 +90,5 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen: Die App kompiliert, die Oberfläche ist aber nur im Browser (Chromium) gegen den Kern geprüft, nicht in der Tauri-Hülle selbst.
 - Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen (der Ordner `dienstreisebuster/` ist bereits entfernt, `db.sqlite3` und `media` des laufenden Tools bleiben dafür erhalten).
 - Tests der TLS-Verbindung zum Mailserver, der Preiserkennung an echten Fahrkarten und des R002 mit der Behörde.
+- Server nach einem Verlust wieder in Betrieb nehmen: Die Rechner merken sich Folgenummern des Servers. Ein leerer Server oder eine ältere Sicherung passen nicht dazu. Nötig ist ein Weg „Server neu befüllen“, der Cursor und Folgenummern zurücksetzt und den Bestand eines Rechners erneut hochlädt (siehe `INSTALLATION.md`, Abschnitt 11).
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

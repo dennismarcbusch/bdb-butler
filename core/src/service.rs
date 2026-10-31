@@ -554,7 +554,8 @@ impl Service {
             None if version == 0 => {
                 return Ok(KeyringStep::Upload { keyring: vault.seal_keyring(&local), base_version: 0, initial: true });
             }
-            // Der Server hat seinen Bestand verloren. Die Einträge werden wie bisher erneut gesendet.
+            // Der Server hat seinen Bestand verloren (zum Beispiel neu aufgesetzt). Einen automatischen Weg, ihn neu
+            // zu befüllen, gibt es noch nicht (siehe docs/INSTALLATION.md, Sicherung). Hier wird nichts hochgeladen.
             None => {}
             Some((server, server_version)) if version == 0 => {
                 if server == local || vault.verify_keyring(&server) {
