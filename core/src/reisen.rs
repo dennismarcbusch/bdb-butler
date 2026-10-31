@@ -1,7 +1,7 @@
 //! Dienstreisemodul: Stammdaten, Dateien im Ordner für PDFs und Anhänge, Antrag und Abrechnung erzeugen,
 //! Mail vorbereiten und senden.
 //!
-//! Portierung der Abläufe aus `dienstreisebuster/reisen/views.py`.
+//! Portierung der Abläufe aus `reisen/views.py` des alten Dienstreisebusters.
 //!
 //! Dateien liegen nicht in der verschlüsselten Datenbank, sondern in einem Ordner, den Nextcloud (oder ein
 //! anderes Werkzeug) synchronisiert. Die Einträge speichern nur den Pfad relativ zu diesem Ordner. Jeder Zugriff

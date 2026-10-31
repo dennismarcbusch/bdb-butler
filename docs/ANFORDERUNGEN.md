@@ -35,7 +35,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 - Mailversand durch den Client: Antrag an die Verwaltung, Abrechnung an das LfF mit auswählbaren Anhängen.
 - Statusverfolgung je Reise: Entwurf, Beantragt, Genehmigt, Abgerechnet, Bezahlt.
 - Nur Einzelabrechnung. Die Sammelabrechnung (LfF R003) bleibt bewusst außen vor.
-- Bestand: Das bisherige Tool „Dienstreisebuster“ (`dienstreisebuster/`, Django). Der Name entfällt, es wird ein Modul des BdB-Butlers.
+- Bestand: Das bisherige Tool „Dienstreisebuster“ (Django) ist abgelöst und aus dem Repository entfernt (letzter Stand: Commit `9e561ca`). Der Name entfällt, es ist ein Modul des BdB-Butlers.
 - Offen: Ticketpreis-Erkennung, R002-Abrechnung (LfF) für Reisen ohne Akademie-Formular, Zuordnung unbekannter Veranstalter-Formulare.
 
 ### Schulen und Ansprechpartner
@@ -88,7 +88,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 ## Offene Punkte
 
 - Tauri-Webview unter Windows (WebView2) und Linux (WebKitGTK) testen: Die App kompiliert, die Oberfläche ist aber nur im Browser (Chromium) gegen den Kern geprüft, nicht in der Tauri-Hülle selbst.
-- Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen, danach kann `dienstreisebuster/` entfallen.
+- Import an der echten Datenbank des alten Django-Tools ausführen und das Ergebnis prüfen (der Ordner `dienstreisebuster/` ist bereits entfernt, `db.sqlite3` und `media` des laufenden Tools bleiben dafür erhalten).
 - SMTP-Passwort im Schlüsselbund des Betriebssystems ablegen (zurzeit Datei mit Rechten 0600).
 - Tests der TLS-Verbindung zum Mailserver, der Preiserkennung an echten Fahrkarten und des R002 mit der Behörde.
 - V3: Tauri 2 (Android) oder PWA; Ordnerzugriff auf Android ist eingeschränkt; Bedarf am Handy klären.

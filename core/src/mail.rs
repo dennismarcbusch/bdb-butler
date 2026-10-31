@@ -1,4 +1,4 @@
-//! Mailversand über den eingetragenen SMTP-Server (Portierung von `dienstreisebuster/reisen/mail.py`).
+//! Mailversand über den eingetragenen SMTP-Server (Portierung von `reisen/mail.py` des alten Dienstreisebusters).
 //!
 //! Die Mail geht direkt von diesem Rechner an den SMTP-Server. Der Server der App sieht sie nie.
 

@@ -12,4 +12,3 @@ Local-first und Ende-zu-Ende verschlüsselt: Die Rechner halten die Daten lokal,
 | `core/` | Rust-Kern (Krypto, Einträge, Datenbank, Sync, Dienstschicht) |
 | `app/` | Tauri-App mit Preact-Oberfläche |
 | `server/` | Go-Sync-Server |
-| `dienstreisebuster/` | Bestandstool (Django), wird abgelöst |

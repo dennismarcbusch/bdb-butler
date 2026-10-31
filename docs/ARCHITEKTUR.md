@@ -25,7 +25,6 @@ Local-first. Jeder Rechner hält alle Daten in einer lokalen Datenbank. Ein Serv
 | `core/` | Rust | Krypto-Kern, Eintragsmodell, lokale Datenbank, Sync-Client, Dienstschicht und lokaler MCP-Server. Wird von der App eingebunden. | Krypto, Einträge, Datenbank, Sync-Client angelegt und getestet (auch gegen den echten Go-Server) |
 | `server/` | Go | Sync-Server für Chiffretext. | angelegt und getestet |
 | `app/` | TypeScript (Preact), Rust (Tauri) | Oberfläche und Tauri-Hülle. Die Hülle hat nur einen Befehl `call`, der an `bdb_core::api::call` weiterreicht. | Einrichten, Entsperren, Einstellungen, Listen und Formulare, Konflikte; Hülle kompiliert, Oberfläche im Browser gegen den Kern getestet |
-| `dienstreisebuster/` | Python (Django) | Bestandstool, wird durch das Dienstreisemodul in der App abgelöst. | läuft weiter bis Meilenstein 3 |
 
 Der Kern gehört in Rust, weil der lokale MCP-Server in dem Prozess laufen muss, der den entschlüsselten Datenschlüssel hält. Dieselbe Rust-Bibliothek läuft auch auf Android (Tauri 2). Die Oberfläche in TypeScript ruft den Kern über Tauri-Befehle auf und kennt weder den Schlüssel noch das Dateiformat.
 

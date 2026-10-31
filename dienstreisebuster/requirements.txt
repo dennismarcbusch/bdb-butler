@@ -1,7 +1,0 @@
-Django==6.1.2
-gunicorn==26.2.0
-pdfplumber==0.11.10
-pypdf==6.21.4
-reportlab==5.1.0
-svglib==2.3.2
-whitenoise==6.12.0

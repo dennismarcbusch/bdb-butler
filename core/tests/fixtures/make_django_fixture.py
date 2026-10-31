@@ -3,6 +3,9 @@
 Die Daten sind erfunden. Aufruf (nur Entwicklung):
     python3 -m venv /tmp/djvenv && /tmp/djvenv/bin/pip install -r ../../../dienstreisebuster/requirements.txt
     /tmp/djvenv/bin/python make_django_fixture.py
+
+Der Code des alten Tools steht nicht mehr im Arbeitsbaum. Zum Neuerzeugen vorher auschecken:
+    git worktree add /tmp/dienstreisebuster-alt 9e561ca && ln -s /tmp/dienstreisebuster-alt/dienstreisebuster ../../../dienstreisebuster
 """
 import datetime as dt
 import decimal

@@ -1,6 +1,6 @@
 //! Dienstreiseantrag (R001) und Reisekostenabrechnung: Zuordnung von Reise und Stammdaten zu Formularfeldern.
 //!
-//! Portierung von `dienstreisebuster/reisen/pdf/antrag.py` und `abrechnung.py`. Die Feldwerte sind gegen die
+//! Portierung von `reisen/pdf/antrag.py` und `abrechnung.py` des alten Dienstreisebusters. Die Feldwerte sind gegen die
 //! Python-Fassung abgesichert (`tests/fixtures/reference.json`, erzeugt von `make_reference.py`).
 //!
 //! Abweichungen von der Python-Fassung:

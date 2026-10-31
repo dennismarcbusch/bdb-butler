@@ -1,6 +1,6 @@
 //! Ausfüllen von AcroForm-PDFs und Aufsetzen einer Unterschrift (SVG).
 //!
-//! Portierung von `dienstreisebuster/reisen/pdf/fuellen.py` (pypdf, reportlab, svglib) nach Rust.
+//! Portierung von `reisen/pdf/fuellen.py` des alten Dienstreisebusters (pypdf, reportlab, svglib) nach Rust.
 //!
 //! - Textfelder bekommen `/V` und, wenn möglich, ein einfaches Erscheinungsbild (einzeilig oder mit
 //!   expliziten Zeilenumbrüchen, linksbündig). Das Formular setzt außerdem `NeedAppearances`, damit

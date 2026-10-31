@@ -6,6 +6,9 @@ Aufruf (nur Entwicklung, braucht pypdf, reportlab und svglib):
 
 Schreibt `reference.json` (Eingaben und erwartete Feldwerte) neben dieses Skript. Die Rust-Tests vergleichen ihre
 Zuordnung damit. Die Referenz-PDFs dienen dem optischen Vergleich.
+
+Der Code des alten Tools steht nicht mehr im Arbeitsbaum. Zum Neuerzeugen vorher auschecken:
+    git worktree add /tmp/dienstreisebuster-alt 9e561ca && ln -s /tmp/dienstreisebuster-alt/dienstreisebuster ../../../dienstreisebuster
 """
 import datetime as dt
 import decimal
