@@ -1,6 +1,14 @@
 # bdb-core
 
-Rust-Kern des BdB-Butlers. Aktuell der Krypto-Kern (`src/crypto.rs`):
+Rust-Kern des BdB-Butlers.
+
+- `src/crypto.rs`: Krypto-Kern
+- `src/record.rs`: Einträge mit Feldern und hybrider logischer Uhr, Zusammenführung, Konflikterkennung
+- `src/store.rs`: lokale SQLite-Datenbank mit Chiffretext, Dreiwege-Zusammenführung
+- `src/sync.rs`: Sync-Client für den Go-Server, Einrichten und Beitreten
+- `tests/sync_server.rs`: Integrationstest gegen den echten Go-Server (baut ihn mit `go build`; ohne Go wird übersprungen)
+
+Der Krypto-Kern:
 
 - Datenschlüssel, verpackt unter Master-Passwort (Argon2id) und Recovery-Key (HKDF-SHA-256) im `Keyring`
 - Einträge verschlüsseln und entschlüsseln (XChaCha20-Poly1305, Eintrags-ID als zusätzliche authentifizierte Daten)

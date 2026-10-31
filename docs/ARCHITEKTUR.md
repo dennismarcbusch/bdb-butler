@@ -22,8 +22,8 @@ Local-first. Jeder Rechner hält alle Daten in einer lokalen Datenbank. Ein Serv
 
 | Ordner | Sprache | Inhalt | Stand |
 |---|---|---|---|
-| `core/` | Rust | Krypto-Kern, später lokale Datenbank, Sync-Client, MCP-Server. Wird von der App eingebunden. | Krypto-Kern angelegt |
-| `server/` | Go | Sync-Server für Chiffretext. | Gerüst angelegt |
+| `core/` | Rust | Krypto-Kern, Eintragsmodell, lokale Datenbank und Sync-Client; später MCP-Server. Wird von der App eingebunden. | Krypto, Einträge, Datenbank, Sync-Client angelegt und getestet (auch gegen den echten Go-Server) |
+| `server/` | Go | Sync-Server für Chiffretext. | angelegt und getestet |
 | `app/` | TypeScript, Rust (Tauri) | Oberfläche und Tauri-Hülle. | noch nicht angelegt |
 | `dienstreisebuster/` | Python (Django) | Bestandstool, wird durch das Dienstreisemodul in der App abgelöst. | läuft weiter bis Meilenstein 3 |
 
@@ -44,7 +44,9 @@ Sicherheitsannahme: Wer den Serverbestand erbeutet, kann das Master-Passwort off
 
 - Jeder Datensatz ist ein **Eintrag** mit ID (UUID) und einem Blob.
 - Der Blob hat das Format `0x01 || Nonce (24 Byte) || Chiffretext || Tag` (XChaCha20-Poly1305). Der Schlüssel wird per HKDF aus dem Datenschlüssel abgeleitet. Die **ID ist als zusätzliche authentifizierte Daten (AAD) gebunden**, damit der Server Blobs nicht zwischen Einträgen vertauschen kann.
-- Der Klartext ist ein JSON-Dokument (geplant): Typ (zum Beispiel `schule`, `person`, `reise`, `protokoll`), Schemaversion, Felder mit Zeitstempel je Feld (hybride logische Uhr) und ein Löschkennzeichen. Löschen ist ein neuer Eintragsstand mit Löschkennzeichen (Tombstone), den der Server nicht von anderen unterscheiden kann.
+- Der Klartext ist ein JSON-Dokument (`core/src/record.rs`): `format` (Version, aktuell 1), `kind` (Typ, zum Beispiel `schule`, `person`, `protokoll`), `fields` und optional `deleted`. Jedes Feld in `fields` hat einen Wert `v` (beliebiges JSON, `null` leert das Feld) und einen Zeitstempel `t`.
+- Der Zeitstempel ist eine hybride logische Uhr in der Form `<Millisekunden, 13 Stellen>-<Zähler, 4 Hexstellen>-<Knoten-ID>`. Die alphabetische Reihenfolge entspricht der zeitlichen. Jeder Rechner hat eine zufällige Knoten-ID. Die Uhr liefert streng aufsteigende Stempel, auch wenn die Systemzeit stehen bleibt oder zurückspringt, und übernimmt Stempel anderer Rechner.
+- Löschen ist ein Register `deleted` mit Wert und eigenem Stempel (Tombstone). Ein gelöschter Eintrag lässt sich mit einem jüngeren Stempel wiederherstellen. Der Server kann ihn nicht von anderen Einträgen unterscheiden.
 - Der Server kennt nur ID, Folgenummer, Größe und Änderungszeit. Er kennt weder Typ noch Inhalt.
 
 ## Sync-Protokoll
@@ -61,7 +63,9 @@ HTTP mit JSON, Bearer-Token (für einen Nutzer reicht ein langes zufälliges Tok
 
 Der Server vergibt bei jedem Schreiben eine global aufsteigende Folgenummer (`seq`). Der Client merkt sich die höchste empfangene Folgenummer und holt damit nur Neues.
 
-**Konflikte:** Bei 409 holt der Client den aktuellen Stand, führt ihn mit seiner Änderung zusammen (Zusammenführung je Feld nach dem Zeitstempel im Klartext, „der Jüngere gewinnt“) und schreibt erneut. Markdown-Texte (Protokolle) werden bei echten Konflikten nicht automatisch gemischt. Dort legt der Client eine Konfliktkopie an.
+**Zusammenführen:** Beim Einspielen eines Serverstandes führt der Client lokalen und fremden Stand je Feld zusammen, der jüngere Zeitstempel gewinnt. Das Ergebnis ist kommutativ, assoziativ und idempotent und hängt nicht von der Reihenfolge der Abgleiche ab (durch Eigenschaftstests abgesichert). Bei 409 wird der aktuelle Serverstand geholt, zusammengeführt und erneut gesendet.
+
+**Konflikte:** Lokal bleibt neben dem aktuellen Stand der zuletzt synchronisierte Stand (`base`). Ein echter Konflikt liegt vor, wenn ein Feld seit `base` auf beiden Seiten verschieden geändert wurde (Dreiwegevergleich). Änderungen an verschiedenen Feldern sind kein Konflikt. Bei einem echten Konflikt gewinnt der jüngere Stempel, und der Client legt einen verschlüsselten Eintrag vom Typ `konflikt` an (Felder `eintrag`, `eintragstyp`, `feld`, `lokal`, `fremd`). Er wird wie jeder Eintrag synchronisiert, damit jeder Rechner den Konflikt sieht und der Nutzer ihn auflösen kann. So geht nie stillschweigend ein Text verloren, auch nicht bei Markdown-Protokollen.
 
 ## Lokaler MCP-Server
 
