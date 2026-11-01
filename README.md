@@ -6,7 +6,7 @@ Desktop-App für die Arbeit als mBdB: Dienstreisen, Schulen und Ansprechpartner,
 - **Ende-zu-Ende verschlüsselt:** Ein kleiner Sync-Server verteilt die Daten zwischen den Rechnern, sieht aber nur Chiffretext.
 - **KI-Zugriff:** Ein lokaler MCP-Server in der App lässt eine KI (zum Beispiel Claude) Einträge suchen, anlegen und ändern. Personenbezogene Typen sind dabei gesperrt, bis du sie freigibst.
 
-Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**
+Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Installer für Windows und Ubuntu baut GitHub Actions (Workflow „Bauen“, siehe [Abschnitt 3.0](docs/INSTALLATION.md#30-bauen-auf-github)).
 
 ## Inhalt
 

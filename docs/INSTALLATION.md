@@ -231,7 +231,36 @@ Hinweise:
 
 ## 3. App aus dem Quelltext bauen
 
-Fertige Installationspakete gibt es noch nicht, die App wird auf dem Zielsystem gebaut (Linux-Pakete unter Linux, Windows-Installer unter Windows).
+Am einfachsten baut GitHub die App für dich (3.0). Selbst bauen (3.1 und 3.2) geht ebenfalls, dann auf dem Zielsystem: Linux-Pakete unter Linux, den Windows-Installer unter Windows. WSL erzeugt Linux-Pakete, keinen Windows-Installer.
+
+### 3.0 Bauen auf GitHub
+
+Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub für Windows und Ubuntu, nachdem die Tests durchgelaufen sind. Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
+
+**Einzelner Bau:**
+
+1. Auf GitHub im Repository **Actions** öffnen und links den Workflow **„Bauen“** wählen.
+2. **„Run workflow“**, Branch `main`, dann wieder **„Run workflow“**.
+3. Ist der Lauf fertig (grüner Haken), unten auf seiner Seite unter **Artifacts** die Datei `BdB-Butler-Windows` oder `BdB-Butler-Ubuntu` herunterladen und entpacken. Darin liegen die Installer (Abschnitt 4).
+
+Die Dateien unter Artifacts hält GitHub 90 Tage vor.
+
+**Release mit Versionsnummer:**
+
+1. Version in `app/src-tauri/tauri.conf.json` (`"version"`) erhöhen und auf `main` bringen.
+2. Ein passendes Tag setzen und pushen:
+
+   ```bash
+   git tag v0.1.0
+   ```
+
+   ```bash
+   git push origin v0.1.0
+   ```
+
+3. Der Workflow baut und legt unter **Releases** einen **Entwurf** mit allen Installern an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen.
+
+Bei jedem Push auf `main` und bei Pull Requests laufen nur die Tests, ohne zu bauen.
 
 ### 3.1 Voraussetzungen
 
@@ -290,13 +319,15 @@ cargo test -p bdb-core
 
 **Linux (Debian, Ubuntu):**
 
+Im Ordner mit dem heruntergeladenen Paket (beim eigenen Bau `target/release/bundle/deb/`):
+
 ```bash
-sudo apt install ./target/release/bundle/deb/*.deb
+sudo apt install ./*_amd64.deb
 ```
 
 Alternativ das AppImage ausführbar machen und starten (`chmod +x`, keine Installation nötig).
 
-**Windows:** Den Installer aus `target/release/bundle/nsis/` oder `msi/` ausführen. Da die Pakete nicht signiert sind, warnt Windows SmartScreen beim ersten Start („Weitere Informationen“, dann „Trotzdem ausführen“).
+**Windows:** Den Installer ausführen: `BdB-Butler_…_x64-setup.exe` (empfohlen) oder `…_x64_en-US.msi`, aus dem Download von GitHub oder beim eigenen Bau aus `target/release/bundle/nsis/` beziehungsweise `msi/`. Da die Pakete nicht signiert sind, warnt Windows SmartScreen beim ersten Start („Weitere Informationen“, dann „Trotzdem ausführen“).
 
 Die App legt ihre Daten in einem eigenen Ordner ab:
 
