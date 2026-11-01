@@ -3,8 +3,10 @@
 # - Bei jedem Push auf main und bei Pull Requests laufen nur die Tests.
 # - Bauen: auf der Seite "Actions" den Workflow "Bauen" wählen und "Run workflow" drücken. Die Installer liegen danach
 #   unten auf der Seite des Laufs unter "Artifacts".
-# - Release: Ein Tag wie v0.1.0 pushen. Dann wird gebaut und ein Release-Entwurf mit allen Installern angelegt, den du
-#   auf GitHub prüfst und veröffentlichst. Die Version im Tag sollte zu "version" in app/src-tauri/tauri.conf.json passen.
+# - Release: Ein Tag wie v0.1.0 pushen. Dann wird gebaut und ein Release-Entwurf mit allen Installern und der
+#   Server-Datei angelegt, den du auf GitHub prüfst und veröffentlichst. Die Version im Tag sollte zu "version" in
+#   app/src-tauri/tauri.conf.json passen. Das Installationsskript für Alpine lädt den Server aus dem neuesten
+#   veröffentlichten Release (server/deploy/install-alpine.sh).
 name: Bauen
 
 on:
@@ -116,9 +118,42 @@ jobs:
             target/release/bundle/rpm/*.rpm
             target/release/bundle/appimage/*.AppImage
 
+  server:
+    name: Server bauen (Linux amd64 und arm64)
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Bauen
+        working-directory: server
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../dist-server
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o ../dist-server/bdbb-server-linux-$arch .
+          done
+          cd ../dist-server
+          sha256sum bdbb-server-linux-* > SHA256SUMS-server.txt
+          cat SHA256SUMS-server.txt
+
+      - name: Server-Dateien bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: BdB-Butler-Server
+          if-no-files-found: error
+          path: dist-server/*
+
   release:
     name: Release-Entwurf anlegen
-    needs: build
+    needs: [build, server]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -136,6 +171,8 @@ jobs:
           files: dist/*
           body: |
             Installer für Windows (`.exe` oder `.msi`) und Linux (`.deb`, `.rpm`, `.AppImage`).
+
+            Sync-Server: `bdbb-server-linux-amd64` und `bdbb-server-linux-arm64` (statisch gebaut, Prüfsummen in `SHA256SUMS-server.txt`). Das Installationsskript für Alpine (`server/deploy/install-alpine.sh`) lädt sie aus dem neuesten veröffentlichten Release.
 
             Die Installer sind nicht signiert. Windows SmartScreen warnt deshalb beim ersten Start: „Weitere Informationen“, dann „Trotzdem ausführen“.
 

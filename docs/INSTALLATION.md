@@ -179,7 +179,9 @@ Empfehlungen:
 
 ### 2.5 Alpine Linux: alles per Skript
 
-`server/deploy/install-alpine.sh` richtet den Server in einem Alpine-Container (LXC) vollständig ein: Pakete installieren, Quelltext von GitHub holen, bauen, Systemnutzer, Einstellungen mit neuem Token, OpenRC-Dienst, tägliche Sicherung, Start und Prüfung. Der Reverse-Proxy muss bereits auf den Container zeigen (Port 8080, sofern du nichts anderes einstellst).
+`server/deploy/install-alpine.sh` richtet den Server in einem Alpine-Container (LXC) vollständig ein: Server-Datei holen, Systemnutzer, Einstellungen mit neuem Token, OpenRC-Dienst, tägliche Sicherung, Start und Prüfung. Der Reverse-Proxy muss bereits auf den Container zeigen (Port 8080, sofern du nichts anderes einstellst).
+
+Die Server-Datei lädt das Skript fertig gebaut aus dem **neuesten veröffentlichten Release** auf GitHub und prüft ihre Prüfsumme (Releases entstehen über den Workflow „Bauen“, siehe [3.0](#30-bauen-auf-github)). Gibt es noch keinen Release, baut es den Server im Container aus dem Quelltext. Das dauert einige Minuten und braucht mehr Speicher (siehe Hinweise).
 
 Als root im Container:
 
@@ -205,9 +207,11 @@ BDBB_PORT=9000 sh install-alpine.sh https://butler.example.de
 |---|---|---|
 | `BDBB_PORT` | Port des Servers (nur bei der Ersteinrichtung, danach in `/etc/bdbb/bdbb.env`) | `8080` |
 | `BDBB_PUBLIC_URL` | wie das erste Argument: öffentliche Adresse für Prüfung und Ausgabe | keiner |
-| `BDBB_REF` | Branch oder Tag | `main` |
+| `BDBB_SOURCE` | `auto` = Release, sonst Quelltext; `release` = nur Release; `source` = immer aus dem Quelltext bauen | `auto` |
+| `BDBB_VERSION` | Release, zum Beispiel `v0.1.0` | `latest` |
+| `BDBB_REF` | Branch oder Tag beim Bauen aus dem Quelltext | `main` |
 | `BDBB_BACKUP` | `0` = keine tägliche Sicherung einrichten | `1` |
-| `BDBB_KEEP_BUILD` | `1` = Go-Caches behalten (schnellere Updates, etwa 1 GB Platz) | `0` |
+| `BDBB_KEEP_BUILD` | `1` = Go-Caches nach dem Bauen behalten (schnellere Updates, etwa 1 GB Platz) | `0` |
 
 Was wo landet:
 
@@ -219,14 +223,15 @@ Was wo landet:
 | `/var/lib/bdbb/bdbb.db` | Datenbank (nur Chiffretext) |
 | `/var/log/bdbb/bdbb.log` | Protokoll (ohne Inhalte und ohne Token) |
 | `/etc/periodic/daily/bdbb-backup` | tägliche Sicherung nach `/var/backups/bdbb/`, 14 Tage aufbewahrt (über `crond`) |
-| `/opt/bdb-butler/src` | Quelltext für Updates |
+| `/opt/bdb-butler/src` | Quelltext (nur beim Bauen aus dem Quelltext) |
 
 Hinweise:
 
 - Der Server läuft als eigener Nutzer `bdbb` ohne Anmelderecht. Das Token wird aus der Datei gelesen und steht nicht in der Prozessliste.
-- Zum Bauen braucht der Container kurzzeitig etwa 1,5 GB RAM und 1 GB freien Platz. Das Skript warnt bei weniger Speicher. Danach räumt es die Go-Caches wieder weg.
-- Alpines Go-Paket ist oft älter als die Version in `server/go.mod`. Das Skript lädt die passende Go-Version dann automatisch von `proxy.golang.org` nach.
-- **Update:** das Skript einfach erneut ausführen. Es holt den neuesten Stand, baut neu und startet den Dienst neu. Token, Einstellungen und Daten bleiben erhalten.
+- Mit fertiger Datei aus dem Release braucht der Container weder Go noch viel Speicher. Fertige Dateien gibt es für `x86_64` und `aarch64`.
+- Nur beim Bauen aus dem Quelltext: Der Container braucht kurzzeitig etwa 1,5 GB RAM und 1 GB freien Platz, das Skript warnt bei weniger Speicher und räumt danach die Go-Caches wieder weg. Alpines Go-Paket ist oft älter als die Version in `server/go.mod`, dann lädt das Skript die passende Go-Version automatisch von `proxy.golang.org` nach.
+- Stimmt die Prüfsumme einer heruntergeladenen Datei nicht, bricht das Skript ab, ohne etwas zu ersetzen.
+- **Update:** das Skript einfach erneut ausführen. Es holt den neuesten Release (oder baut neu), ersetzt die Server-Datei und startet den Dienst neu. Token, Einstellungen und Daten bleiben erhalten.
 - Prüft das Skript am Ende die öffentliche Adresse vergeblich, liegt das oft nur daran, dass der Container sich selbst nicht über den Proxy erreicht. Dann von einem anderen Rechner aus `curl https://butler.example.de/healthz` aufrufen (mit deiner Adresse).
 
 ## 3. App aus dem Quelltext bauen
@@ -235,7 +240,7 @@ Am einfachsten baut GitHub die App für dich (3.0). Selbst bauen (3.1 und 3.2) g
 
 ### 3.0 Bauen auf GitHub
 
-Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub für Windows und Ubuntu, nachdem die Tests durchgelaufen sind. Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
+Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub für Windows und Ubuntu und den Sync-Server für Linux, nachdem die Tests durchgelaufen sind. Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
 
 **Einzelner Bau:**
 
@@ -258,7 +263,7 @@ Die Dateien unter Artifacts hält GitHub 90 Tage vor.
    git push origin v0.1.0
    ```
 
-3. Der Workflow baut und legt unter **Releases** einen **Entwurf** mit allen Installern an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen.
+3. Der Workflow baut und legt unter **Releases** einen **Entwurf** mit allen Installern und der Server-Datei (`bdbb-server-linux-amd64`, `-arm64`, Prüfsummen in `SHA256SUMS-server.txt`) an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen, und das Installationsskript für Alpine (2.5) nimmt die Server-Datei von dort.
 
 Bei jedem Push auf `main` und bei Pull Requests laufen nur die Tests, ohne zu bauen.
 

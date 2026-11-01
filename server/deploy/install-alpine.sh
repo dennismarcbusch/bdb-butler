@@ -1,5 +1,8 @@
 #!/bin/sh
-# Baut, installiert und startet den Sync-Server des BdB-Butlers auf Alpine Linux (zum Beispiel in einem LXC).
+# Installiert und startet den Sync-Server des BdB-Butlers auf Alpine Linux (zum Beispiel in einem LXC).
+#
+# Die Server-Datei kommt fertig gebaut aus dem neuesten Release auf GitHub (Prüfsumme wird kontrolliert). Gibt es
+# noch keinen Release oder keine Datei für diese Architektur, baut das Skript den Server aus dem Quelltext.
 #
 # Aufruf als root:
 #
@@ -16,8 +19,11 @@
 #   BDBB_PORT        Port, auf dem der Server lauscht (Standard 8080). Gilt nur bei der Ersteinrichtung,
 #                    danach steht er in /etc/bdbb/bdbb.env.
 #   BDBB_PUBLIC_URL  wie das erste Argument: Adresse hinter dem Reverse-Proxy (ohne Standard)
-#   BDBB_REPO        Git-Repository (Standard https://github.com/dennismarcbusch/bdb-butler.git)
-#   BDBB_REF         Branch oder Tag (Standard main)
+#   BDBB_SOURCE      Woher der Server kommt: auto (Release, sonst Quelltext), release (nur Release) oder
+#                    source (immer aus dem Quelltext bauen). Standard auto
+#   BDBB_VERSION     Release, zum Beispiel v0.1.0 (Standard latest, der neueste veröffentlichte)
+#   BDBB_GITHUB      Repository auf GitHub (Standard dennismarcbusch/bdb-butler)
+#   BDBB_REF         Branch oder Tag beim Bauen aus dem Quelltext (Standard main)
 #   BDBB_BACKUP      1 = tägliche Sicherung der Datenbank einrichten (Standard 1)
 #   BDBB_KEEP_BUILD  1 = Go-Caches nach dem Bauen behalten (schnellere Updates, etwa 1 GB Platz). Standard 0
 #
@@ -35,7 +41,10 @@ set -eu
 PORT="${BDBB_PORT:-8080}"
 PUBLIC_URL="${1:-${BDBB_PUBLIC_URL:-}}"
 PUBLIC_URL="${PUBLIC_URL%/}"
-REPO="${BDBB_REPO:-https://github.com/dennismarcbusch/bdb-butler.git}"
+SOURCE="${BDBB_SOURCE:-auto}"
+VERSION="${BDBB_VERSION:-latest}"
+GITHUB="${BDBB_GITHUB:-dennismarcbusch/bdb-butler}"
+REPO="https://github.com/$GITHUB.git"
 REF="${BDBB_REF:-main}"
 BACKUP="${BDBB_BACKUP:-1}"
 KEEP_BUILD="${BDBB_KEEP_BUILD:-0}"
@@ -68,14 +77,19 @@ case "$PUBLIC_URL" in
 	*) die "Die Adresse muss mit https:// beginnen, zum Beispiel https://butler.example.de" ;;
 esac
 
-mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
-if [ "${mem_kb:-0}" -lt 1500000 ]; then
-	warn "Der Container hat weniger als 1,5 GB RAM. Das Bauen (SQLite-Treiber in Go) braucht kurzzeitig viel Speicher \
-und kann abbrechen. Dann vorübergehend mehr RAM oder Swap zuweisen."
-fi
+case "$SOURCE" in
+	auto|release|source) ;;
+	*) die "BDBB_SOURCE muss auto, release oder source sein." ;;
+esac
+
+case "$(uname -m)" in
+	x86_64) ARCH=amd64 ;;
+	aarch64|arm64) ARCH=arm64 ;;
+	*) ARCH="" ;;
+esac
 
 info "Pakete installieren"
-apk add --no-cache git go ca-certificates curl sqlite >/dev/null
+apk add --no-cache ca-certificates curl sqlite >/dev/null
 
 # ----- Nutzer und Ordner -------------------------------------------------------------------------------------
 
@@ -87,36 +101,94 @@ install -d -o bdbb -g bdbb -m 0750 "$LOG_DIR"
 install -d -o root -g bdbb -m 0750 "$CONF_DIR"
 install -d -m 0755 "$BASE" "$(dirname "$RUNNER")"
 
-# ----- Quelltext holen ---------------------------------------------------------------------------------------
+# Ersetzt die Server-Datei. Umbenennen statt Überschreiben, damit ein laufender Server nicht stört.
+install_binary() {
+	chmod 0755 "$1"
+	mv -f "$1" "$BIN"
+}
 
-info "Quelltext holen ($REPO, $REF)"
-if [ -d "$SRC/.git" ]; then
-	git -C "$SRC" fetch --quiet --depth 1 origin "$REF"
-	git -C "$SRC" reset --quiet --hard FETCH_HEAD
-else
-	rm -rf "$SRC"
-	git clone --quiet --depth 1 --branch "$REF" "$REPO" "$SRC"
-fi
-COMMIT=$(git -C "$SRC" rev-parse --short HEAD)
-echo "Stand: $COMMIT"
+# ----- Fertige Datei aus dem Release -------------------------------------------------------------------------
 
-# ----- Bauen -------------------------------------------------------------------------------------------------
+# Lädt die Server-Datei aus dem Release und prüft sie gegen SHA256SUMS-server.txt. Gelingt das nicht, Rückgabe 1.
+from_release() {
+	[ -n "$ARCH" ] || { echo "Keine fertige Datei für $(uname -m)."; return 1; }
+	if [ "$VERSION" = "latest" ]; then
+		base="https://github.com/$GITHUB/releases/latest/download"
+		tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$GITHUB/releases/latest" 2>/dev/null | sed -n 's|.*/tag/||p')
+	else
+		base="https://github.com/$GITHUB/releases/download/$VERSION"
+		tag="$VERSION"
+	fi
+	[ -n "$tag" ] || { echo "Es gibt noch keinen veröffentlichten Release."; return 1; }
+	file="bdbb-server-linux-$ARCH"
+	tmp=$(mktemp -d)
+	if ! curl -fsL --retry 3 -o "$tmp/$file" "$base/$file" || ! curl -fsL --retry 3 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS-server.txt"; then
+		rm -rf "$tmp"
+		echo "Release $tag enthält keine Server-Datei für $ARCH."
+		return 1
+	fi
+	if ! (cd "$tmp" && grep " $file\$" SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
+		rm -rf "$tmp"
+		die "Die Prüfsumme der heruntergeladenen Datei stimmt nicht. Abgebrochen, nichts wurde ersetzt."
+	fi
+	install_binary "$tmp/$file"
+	rm -rf "$tmp"
+	COMMIT="Release $tag"
+	echo "Server aus Release $tag geladen und geprüft."
+}
 
-info "Server bauen (das dauert beim ersten Mal einige Minuten)"
-# Alpines Go-Paket ist oft älter als die Version in go.mod. GOTOOLCHAIN=auto lädt dann die passende Version
-# von proxy.golang.org (die offiziellen Go-Werkzeuge sind statisch gelinkt und laufen auch mit musl).
-export GOTOOLCHAIN=auto
-export GOPATH="$BASE/go"
-export GOCACHE="$BASE/go-cache"
-export GOFLAGS=-mod=readonly
-export CGO_ENABLED=0
-(cd "$SRC/server" && go build -trimpath -ldflags "-s -w" -o "$BIN.new" .)
-install -m 0755 "$BIN.new" "$BIN"
-rm -f "$BIN.new"
-if [ "$KEEP_BUILD" != "1" ]; then
-	go clean -cache -modcache >/dev/null 2>&1 || true
-	rm -rf "$GOPATH" "$GOCACHE"
-fi
+# ----- Bauen aus dem Quelltext -------------------------------------------------------------------------------
+
+from_source() {
+	mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+	if [ "${mem_kb:-0}" -lt 1500000 ]; then
+		warn "Der Container hat weniger als 1,5 GB RAM. Das Bauen (SQLite-Treiber in Go) braucht kurzzeitig viel \
+Speicher und kann abbrechen. Dann vorübergehend mehr RAM oder Swap zuweisen."
+	fi
+	apk add --no-cache git go >/dev/null
+
+	info "Quelltext holen ($REPO, $REF)"
+	if [ -d "$SRC/.git" ]; then
+		git -C "$SRC" fetch --quiet --depth 1 origin "$REF"
+		git -C "$SRC" reset --quiet --hard FETCH_HEAD
+	else
+		rm -rf "$SRC"
+		git clone --quiet --depth 1 --branch "$REF" "$REPO" "$SRC"
+	fi
+	COMMIT="Quelltext $(git -C "$SRC" rev-parse --short HEAD)"
+
+	info "Server bauen (das dauert beim ersten Mal einige Minuten)"
+	# Alpines Go-Paket ist oft älter als die Version in go.mod. GOTOOLCHAIN=auto lädt dann die passende Version
+	# von proxy.golang.org (die offiziellen Go-Werkzeuge sind statisch gelinkt und laufen auch mit musl).
+	(
+		export GOTOOLCHAIN=auto GOPATH="$BASE/go" GOCACHE="$BASE/go-cache" GOFLAGS=-mod=readonly CGO_ENABLED=0
+		cd "$SRC/server"
+		go build -trimpath -ldflags "-s -w" -o "$BIN.new" .
+		if [ "$KEEP_BUILD" != "1" ]; then
+			go clean -cache -modcache >/dev/null 2>&1 || true
+			rm -rf "$GOPATH" "$GOCACHE"
+		fi
+	)
+	install_binary "$BIN.new"
+}
+
+COMMIT=""
+case "$SOURCE" in
+	source)
+		from_source
+		;;
+	release)
+		info "Server aus dem Release laden ($GITHUB, $VERSION)"
+		from_release || die "Kein passender Release gefunden (BDBB_SOURCE=release)."
+		;;
+	auto)
+		info "Server aus dem Release laden ($GITHUB, $VERSION)"
+		if ! from_release; then
+			echo "Baue stattdessen aus dem Quelltext."
+			from_source
+		fi
+		;;
+esac
 
 # ----- Einstellungen -----------------------------------------------------------------------------------------
 
