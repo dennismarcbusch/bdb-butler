@@ -35,6 +35,8 @@ Die Rechner, auf denen die App läuft, sollten eine Festplattenverschlüsselung 
 
 Der Server ist ein einzelnes Programm ohne Abhängigkeiten. Er speichert in einer SQLite-Datei nur Chiffretext und kennt keine Inhalte.
 
+**Alpine Linux:** Ein Skript erledigt alles auf einmal (bauen, einrichten, starten), siehe [2.5](#25-alpine-linux-alles-per-skript). Die Abschnitte 2.1 bis 2.4 beschreiben den Weg von Hand, zum Beispiel für Debian.
+
 ### 2.1 Token erzeugen
 
 Das Token schützt den Zugriff auf den Chiffretext. Es muss mindestens 32 Zeichen lang sein:
@@ -174,6 +176,56 @@ Empfehlungen:
 - Der Port 8080 des Server-Containers sollte nur vom Caddy-Container aus erreichbar sein (Proxmox-Firewall oder `nftables`).
 - Die Anfragen der App tragen das Token im Kopf `Authorization`. Caddy schwärzt diesen Kopf in Zugriffsprotokollen von sich aus. Schalte die globale Option `log_credentials` nicht ein.
 - Einträge sind höchstens 1 MiB groß, eine Anfrage höchstens 2 MiB. Ein Limit im Proxy darf nicht darunter liegen.
+
+### 2.5 Alpine Linux: alles per Skript
+
+`server/deploy/install-alpine.sh` richtet den Server in einem Alpine-Container (LXC) vollständig ein: Pakete installieren, Quelltext von GitHub holen, bauen, Systemnutzer, Einstellungen mit neuem Token, OpenRC-Dienst, tägliche Sicherung, Start und Prüfung. Der Reverse-Proxy muss bereits auf den Container zeigen (Port 8080, sofern du nichts anderes einstellst).
+
+Als root im Container:
+
+```bash
+wget -O install-alpine.sh https://raw.githubusercontent.com/dennismarcbusch/bdb-butler/main/server/deploy/install-alpine.sh
+```
+
+```bash
+sh install-alpine.sh
+```
+
+Am Ende stehen **Server-Adresse und Token** auf dem Bildschirm. Übernimm das Token in deinen Passwortmanager und trag beides in der App ein (Abschnitt 5). Das Token steht außerdem in `/etc/bdbb/bdbb.env`.
+
+Anpassen lässt sich das Skript über Umgebungsvariablen, zum Beispiel ein anderer Port:
+
+```bash
+BDBB_PORT=9000 sh install-alpine.sh
+```
+
+| Variable | Bedeutung | Standard |
+|---|---|---|
+| `BDBB_PORT` | Port des Servers (nur bei der Ersteinrichtung, danach in `/etc/bdbb/bdbb.env`) | `8080` |
+| `BDBB_PUBLIC_URL` | öffentliche Adresse, nur für die Prüfung am Ende | `https://bdb-butler.busch.network` |
+| `BDBB_REF` | Branch oder Tag | `main` |
+| `BDBB_BACKUP` | `0` = keine tägliche Sicherung einrichten | `1` |
+| `BDBB_KEEP_BUILD` | `1` = Go-Caches behalten (schnellere Updates, etwa 1 GB Platz) | `0` |
+
+Was wo landet:
+
+| Pfad | Inhalt |
+|---|---|
+| `/usr/local/bin/bdbb-server` | der Server |
+| `/etc/bdbb/bdbb.env` | Token, Adresse, Datenbankpfad (nur für root und die Gruppe `bdbb` lesbar) |
+| `/etc/init.d/bdbb` | OpenRC-Dienst, startet beim Booten (`rc-service bdbb status`, `restart`, `stop`) |
+| `/var/lib/bdbb/bdbb.db` | Datenbank (nur Chiffretext) |
+| `/var/log/bdbb/bdbb.log` | Protokoll (ohne Inhalte und ohne Token) |
+| `/etc/periodic/daily/bdbb-backup` | tägliche Sicherung nach `/var/backups/bdbb/`, 14 Tage aufbewahrt (über `crond`) |
+| `/opt/bdb-butler/src` | Quelltext für Updates |
+
+Hinweise:
+
+- Der Server läuft als eigener Nutzer `bdbb` ohne Anmelderecht. Das Token wird aus der Datei gelesen und steht nicht in der Prozessliste.
+- Zum Bauen braucht der Container kurzzeitig etwa 1,5 GB RAM und 1 GB freien Platz. Das Skript warnt bei weniger Speicher. Danach räumt es die Go-Caches wieder weg.
+- Alpines Go-Paket ist oft älter als die Version in `server/go.mod`. Das Skript lädt die passende Go-Version dann automatisch von `proxy.golang.org` nach.
+- **Update:** das Skript einfach erneut ausführen. Es holt den neuesten Stand, baut neu und startet den Dienst neu. Token, Einstellungen und Daten bleiben erhalten.
+- Prüft das Skript am Ende die öffentliche Adresse vergeblich, liegt das oft nur daran, dass der Container sich selbst nicht über den Proxy erreicht. Dann von einem anderen Rechner aus `curl https://bdb-butler.busch.network/healthz` aufrufen.
 
 ## 3. App aus dem Quelltext bauen
 
@@ -416,7 +468,9 @@ Die Sicherung der Server-Datenbank ist die Notfallkopie für den Fall, dass kein
 
 ## 12. Updates
 
-**Server:** neu bauen (Abschnitt 2.2), Datei ersetzen und den Dienst neu starten:
+**Server unter Alpine mit Skript (Abschnitt 2.5):** `sh install-alpine.sh` erneut ausführen.
+
+**Server von Hand:** neu bauen (Abschnitt 2.2), Datei ersetzen und den Dienst neu starten:
 
 ```bash
 install -m 0755 bdbb-server /usr/local/bin/bdbb-server
@@ -433,7 +487,7 @@ systemctl restart bdbb
 | Meldung oder Verhalten | Ursache und Abhilfe |
 |---|---|
 | „Der Server hat das Token abgelehnt“ | Token in der App stimmt nicht mit `BDBB_TOKEN` überein. In Einstellungen, Server und Ordner neu eintragen |
-| „Server nicht erreichbar“ | Adresse prüfen (mit `https://`), `curl https://butler.example.de/healthz`, Caddy und `systemctl status bdbb` prüfen |
+| „Server nicht erreichbar“ | Adresse prüfen (mit `https://`), `curl https://butler.example.de/healthz`, Caddy und `systemctl status bdbb` prüfen (Alpine: `rc-service bdbb status`, Protokoll in `/var/log/bdbb/bdbb.log`) |
 | „Auf dem Server liegt ein anderer Tresor als lokal“ | Der Rechner hat offline einen eigenen Tresor angelegt, auf dem Server liegt schon einer. Den lokalen Datenordner entfernen (Abschnitt 4) und mit „Mit vorhandenem Tresor verbinden“ neu einrichten. Achtung: Was nur lokal existierte, geht dabei verloren |
 | Hinweis „neuerer Keyring, dessen Prüfsumme nicht passt“ | Der Keyring auf dem Server stammt nicht von diesem Tresor oder von einer älteren App-Fassung. Alle Rechner aktualisieren und das Passwort auf einem davon neu setzen. Tritt das ohne Passwortwechsel auf, den Server prüfen |
 | „Der Server ist leer, er hat seinen Bestand verloren“ | Der Server wurde neu aufgesetzt oder seine Datenbank ist weg. In den Einstellungen unter Abgleich „Server neu befüllen“ wählen (Abschnitt 11.1) |

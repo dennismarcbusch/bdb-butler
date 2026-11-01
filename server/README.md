@@ -18,3 +18,5 @@ go test -race ./...
 ```
 
 Der Server spricht nur HTTP. TLS übernimmt der Caddy davor. Go-Version: siehe `go.mod` (Go lädt die passende Version automatisch nach).
+
+Einrichtung auf Alpine Linux (LXC) in einem Schritt: `deploy/install-alpine.sh`, beschrieben in `../docs/INSTALLATION.md`, Abschnitt 2.5.
