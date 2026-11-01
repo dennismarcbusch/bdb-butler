@@ -4,7 +4,10 @@
 # Aufruf als root:
 #
 #   wget -O install-alpine.sh https://raw.githubusercontent.com/dennismarcbusch/bdb-butler/main/server/deploy/install-alpine.sh
-#   sh install-alpine.sh
+#   sh install-alpine.sh https://butler.example.de
+#
+# Die Adresse ist die, unter der dein Reverse-Proxy den Server erreichbar macht. Sie ist optional und dient nur
+# der Prüfung und der Ausgabe am Ende.
 #
 # Erneut ausführen aktualisiert den Server auf den neuesten Stand. Token, Einstellungen und Daten bleiben erhalten.
 #
@@ -12,8 +15,7 @@
 #
 #   BDBB_PORT        Port, auf dem der Server lauscht (Standard 8080). Gilt nur bei der Ersteinrichtung,
 #                    danach steht er in /etc/bdbb/bdbb.env.
-#   BDBB_PUBLIC_URL  Adresse hinter dem Reverse-Proxy, nur für die Prüfung am Ende
-#                    (Standard https://bdb-butler.busch.network)
+#   BDBB_PUBLIC_URL  wie das erste Argument: Adresse hinter dem Reverse-Proxy (ohne Standard)
 #   BDBB_REPO        Git-Repository (Standard https://github.com/dennismarcbusch/bdb-butler.git)
 #   BDBB_REF         Branch oder Tag (Standard main)
 #   BDBB_BACKUP      1 = tägliche Sicherung der Datenbank einrichten (Standard 1)
@@ -31,7 +33,8 @@
 set -eu
 
 PORT="${BDBB_PORT:-8080}"
-PUBLIC_URL="${BDBB_PUBLIC_URL:-https://bdb-butler.busch.network}"
+PUBLIC_URL="${1:-${BDBB_PUBLIC_URL:-}}"
+PUBLIC_URL="${PUBLIC_URL%/}"
 REPO="${BDBB_REPO:-https://github.com/dennismarcbusch/bdb-butler.git}"
 REF="${BDBB_REF:-main}"
 BACKUP="${BDBB_BACKUP:-1}"
@@ -59,6 +62,10 @@ die() { printf '\nFehler: %s\n' "$*" >&2; exit 1; }
 command -v rc-service >/dev/null 2>&1 || die "OpenRC fehlt (rc-service nicht gefunden)."
 case "$PORT" in
 	''|*[!0-9]*) die "BDBB_PORT muss eine Zahl sein." ;;
+esac
+case "$PUBLIC_URL" in
+	''|https://*|http://*) ;;
+	*) die "Die Adresse muss mit https:// beginnen, zum Beispiel https://butler.example.de" ;;
 esac
 
 mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
@@ -224,7 +231,9 @@ else
 fi
 
 LXC_IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1)
-if curl -fsS --max-time 10 "$PUBLIC_URL/healthz" >/dev/null 2>&1; then
+if [ -z "$PUBLIC_URL" ]; then
+	echo "Keine öffentliche Adresse angegeben, Prüfung über den Reverse-Proxy übersprungen."
+elif curl -fsS --max-time 10 "$PUBLIC_URL/healthz" >/dev/null 2>&1; then
 	echo "Über den Reverse-Proxy: $PUBLIC_URL antwortet."
 else
 	warn "$PUBLIC_URL/healthz ist von hier aus nicht erreichbar. Prüfe, ob der Reverse-Proxy auf \
@@ -239,7 +248,7 @@ cat <<EOF
 ========================================================================================================
  BdB-Butler Sync-Server läuft (Stand $COMMIT)
 
- Server-Adresse für die App:  $PUBLIC_URL
+ Server-Adresse für die App:  ${PUBLIC_URL:-die Adresse deines Reverse-Proxys (https://…)}
  Lauscht auf:                 ${LXC_IP:-<IP dieses Containers>}:$LISTEN_PORT (Ziel des Reverse-Proxys)
 EOF
 if [ -n "$NEW_TOKEN" ]; then

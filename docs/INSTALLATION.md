@@ -188,21 +188,23 @@ wget -O install-alpine.sh https://raw.githubusercontent.com/dennismarcbusch/bdb-
 ```
 
 ```bash
-sh install-alpine.sh
+sh install-alpine.sh https://butler.example.de
 ```
+
+Die Adresse ist die, unter der dein Reverse-Proxy den Server erreichbar macht. Sie ist optional: Mit ihr prüft das Skript am Ende auch den Weg über den Proxy und zeigt sie als Server-Adresse an.
 
 Am Ende stehen **Server-Adresse und Token** auf dem Bildschirm. Übernimm das Token in deinen Passwortmanager und trag beides in der App ein (Abschnitt 5). Das Token steht außerdem in `/etc/bdbb/bdbb.env`.
 
 Anpassen lässt sich das Skript über Umgebungsvariablen, zum Beispiel ein anderer Port:
 
 ```bash
-BDBB_PORT=9000 sh install-alpine.sh
+BDBB_PORT=9000 sh install-alpine.sh https://butler.example.de
 ```
 
 | Variable | Bedeutung | Standard |
 |---|---|---|
 | `BDBB_PORT` | Port des Servers (nur bei der Ersteinrichtung, danach in `/etc/bdbb/bdbb.env`) | `8080` |
-| `BDBB_PUBLIC_URL` | öffentliche Adresse, nur für die Prüfung am Ende | `https://bdb-butler.busch.network` |
+| `BDBB_PUBLIC_URL` | wie das erste Argument: öffentliche Adresse für Prüfung und Ausgabe | keiner |
 | `BDBB_REF` | Branch oder Tag | `main` |
 | `BDBB_BACKUP` | `0` = keine tägliche Sicherung einrichten | `1` |
 | `BDBB_KEEP_BUILD` | `1` = Go-Caches behalten (schnellere Updates, etwa 1 GB Platz) | `0` |
@@ -225,7 +227,7 @@ Hinweise:
 - Zum Bauen braucht der Container kurzzeitig etwa 1,5 GB RAM und 1 GB freien Platz. Das Skript warnt bei weniger Speicher. Danach räumt es die Go-Caches wieder weg.
 - Alpines Go-Paket ist oft älter als die Version in `server/go.mod`. Das Skript lädt die passende Go-Version dann automatisch von `proxy.golang.org` nach.
 - **Update:** das Skript einfach erneut ausführen. Es holt den neuesten Stand, baut neu und startet den Dienst neu. Token, Einstellungen und Daten bleiben erhalten.
-- Prüft das Skript am Ende die öffentliche Adresse vergeblich, liegt das oft nur daran, dass der Container sich selbst nicht über den Proxy erreicht. Dann von einem anderen Rechner aus `curl https://bdb-butler.busch.network/healthz` aufrufen.
+- Prüft das Skript am Ende die öffentliche Adresse vergeblich, liegt das oft nur daran, dass der Container sich selbst nicht über den Proxy erreicht. Dann von einem anderen Rechner aus `curl https://butler.example.de/healthz` aufrufen (mit deiner Adresse).
 
 ## 3. App aus dem Quelltext bauen
 
@@ -468,7 +470,7 @@ Die Sicherung der Server-Datenbank ist die Notfallkopie für den Fall, dass kein
 
 ## 12. Updates
 
-**Server unter Alpine mit Skript (Abschnitt 2.5):** `sh install-alpine.sh` erneut ausführen.
+**Server unter Alpine mit Skript (Abschnitt 2.5):** `sh install-alpine.sh https://butler.example.de` erneut ausführen.
 
 **Server von Hand:** neu bauen (Abschnitt 2.2), Datei ersetzen und den Dienst neu starten:
 
