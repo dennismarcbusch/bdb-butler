@@ -86,13 +86,47 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   padding: 1rem; border: 2px dashed var(--border); border-radius: 8px; user-select: all;
 }
 
-.shell { min-height: 100vh; display: flex; flex-direction: column; }
-header { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1rem; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-nav { display: flex; gap: 0.4rem; flex: 1; flex-wrap: wrap; }
-.header-actions { display: flex; align-items: center; gap: 0.8rem; }
+/* Menü links, Inhalt rechts. Die Seitenleiste bleibt beim Scrollen stehen. */
+.shell {
+  --sidebar-width: 16rem;
+  min-height: 100vh; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  /* Hintergrund und Trennlinie der Leiste reichen auch auf langen Seiten bis ganz unten. */
+  background: linear-gradient(to right, var(--panel) calc(var(--sidebar-width) - 1px), var(--border) 0 var(--sidebar-width), transparent 0);
+}
+.sidebar {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 0.8rem; padding: 0.9rem 0.7rem;
+  background: var(--panel); border-right: 1px solid var(--border);
+}
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.sidebar h1 { font-size: 1.15rem; margin: 0 0.3rem 0.2rem; }
+nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
+nav button { width: 100%; display: flex; align-items: center; gap: 0.5rem; text-align: left; border-color: transparent; background: transparent; padding: 0.42rem 0.6rem; }
+.nav-label { flex: 1; min-width: 0; overflow-wrap: break-word; }
+.nav-badge {
+  min-width: 1.5rem; padding: 0 0.4rem; border-radius: 999px; text-align: center;
+  font-size: 0.78rem; font-weight: 600; line-height: 1.35rem;
+  background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+}
+.nav-badge.danger { background: var(--danger); color: var(--accent-text); border-color: var(--danger); }
+nav button.active .nav-badge { background: var(--accent-text); color: var(--accent); border-color: var(--accent-text); }
+nav button:hover:not(:disabled) { background: var(--bg); border-color: var(--border); }
+.nav-separator { border: none; border-top: 1px solid var(--border); margin: 0.5rem 0.3rem; width: auto; }
+.sidebar-actions { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.6rem 0.3rem 0; border-top: 1px solid var(--border); }
 .sync-status { color: var(--muted); font-size: 0.85rem; }
+.main-area { display: flex; flex-direction: column; min-width: 0; }
 .banner { margin: 0; padding: 0.5rem 1rem; background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
 .content { padding: 1rem; flex: 1; }
+
+/* Schmale Fenster: Menü wieder oben, Einträge nebeneinander. */
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; background: none; }
+  .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  nav { flex-direction: row; flex-wrap: wrap; }
+  nav button { width: auto; border-color: var(--border); }
+  .nav-separator { display: none; }
+  .sidebar-actions { flex-direction: row; align-items: center; justify-content: space-between; }
+}
 
 .split { display: grid; grid-template-columns: minmax(14rem, 22rem) 1fr; gap: 1rem; align-items: start; }
 @media (max-width: 760px) { .split { grid-template-columns: 1fr; } }
@@ -234,7 +268,8 @@ div.inline select { width: auto; }
 .report-controls .field { margin: 0; }
 
 @media print {
-  header, .report-controls, .banner, .no-print { display: none !important; }
+  .sidebar, .report-controls, .banner, .no-print { display: none !important; }
+  .shell { display: block; }
   .content > section, .report-body { border: none; padding: 0; background: #fff; }
   .markdown, .markdown * { color: #000; }
 }

@@ -18,6 +18,20 @@ interface Props {
 /** Nach dieser Zeit ohne Eingabe sperrt sich die App. */
 const IDLE_LOCK_MS = 15 * 60 * 1000;
 
+/**
+ * Zähler im Menü als kleine Plakette. Für Screenreader (und als Name der Schaltfläche) steht er als Text in Klammern
+ * dahinter, zum Beispiel „Auftragsbuch (1 überfällig)“.
+ */
+function NavCount({ count, text, tone }: { count: number; text: string; tone?: 'danger' }) {
+  if (count <= 0) return null;
+  return (
+    <>
+      <span class="visually-hidden"> ({text})</span>
+      <span class={`nav-badge${tone ? ` ${tone}` : ''}`} aria-hidden="true" title={text}>{count}</span>
+    </>
+  );
+}
+
 export function Shell({ configured, onStatusChanged }: Props) {
   const [kinds, setKinds] = useState<KindDef[] | null>(null);
   const [view, setView] = useState('schule');
@@ -91,16 +105,17 @@ export function Shell({ configured, onStatusChanged }: Props) {
 
   return (
     <div class="shell">
-      <header>
+      <aside class="sidebar">
         <h1>BdB-Butler</h1>
         <nav aria-label="Bereiche">
           {kinds.filter((k) => !k.hidden).map((k) => (
             <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
-              {k.label_plural}
-              {k.kind === 'auftrag' && overdue > 0 ? ` (${overdue} überfällig)` : ''}
-              {k.kind === 'bedarf' && openRequests > 0 ? ` (${openRequests} offen)` : ''}
+              <span class="nav-label">{k.label_plural}</span>
+              {k.kind === 'auftrag' && <NavCount count={overdue} text={`${overdue} überfällig`} tone="danger" />}
+              {k.kind === 'bedarf' && <NavCount count={openRequests} text={`${openRequests} offen`} />}
             </button>
           ))}
+          <hr class="nav-separator" aria-hidden="true" />
           <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>
             Graph
           </button>
@@ -108,13 +123,14 @@ export function Shell({ configured, onStatusChanged }: Props) {
             Tätigkeitsbericht
           </button>
           <button type="button" class={view === 'conflicts' ? 'active' : ''} onClick={() => setView('conflicts')}>
-            Konflikte{conflicts.length > 0 ? ` (${conflicts.length})` : ''}
+            <span class="nav-label">Konflikte</span>
+            <NavCount count={conflicts.length} text={String(conflicts.length)} tone="danger" />
           </button>
           <button type="button" class={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
             Einstellungen
           </button>
         </nav>
-        <div class="header-actions">
+        <div class="sidebar-actions">
           <span class="sync-status" role="status" data-testid="sync-status">
             {!configured
               ? 'Kein Server'
@@ -130,39 +146,41 @@ export function Shell({ configured, onStatusChanged }: Props) {
           </span>
           <button type="button" onClick={() => void lock()}>Sperren</button>
         </div>
-      </header>
+      </aside>
 
-      {sync.error && <p class="banner error" role="alert">{sync.error}</p>}
-      {error && <p class="banner error" role="alert">{error}</p>}
+      <div class="main-area">
+        {sync.error && <p class="banner error" role="alert">{sync.error}</p>}
+        {error && <p class="banner error" role="alert">{error}</p>}
 
-      <main class="content">
-        {activeKind && (
-          <KindView
-            key={`${activeKind.kind}:${focus?.kind === activeKind.kind ? focus.nonce : 0}`}
-            kind={activeKind}
-            kinds={kinds}
-            revision={sync.revision}
-            initialSelected={focus?.kind === activeKind.kind ? focus.id : null}
-            onChanged={afterChange}
-            onNavigate={openRecord}
-          />
-        )}
-        {view === 'report' && <ReportView revision={sync.revision} />}
-        {view === 'graph' && <GraphView kinds={kinds} revision={sync.revision} onOpen={openRecord} />}
-        {view === 'conflicts' && (
-          <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />
-        )}
-        {view === 'settings' && (
-          <Settings
-            kinds={kinds}
-            configured={configured}
-            sync={sync}
-            onSync={() => void runSync()}
-            onRefill={refillServer}
-            onStatusChanged={onStatusChanged}
-          />
-        )}
-      </main>
+        <main class="content">
+          {activeKind && (
+            <KindView
+              key={`${activeKind.kind}:${focus?.kind === activeKind.kind ? focus.nonce : 0}`}
+              kind={activeKind}
+              kinds={kinds}
+              revision={sync.revision}
+              initialSelected={focus?.kind === activeKind.kind ? focus.id : null}
+              onChanged={afterChange}
+              onNavigate={openRecord}
+            />
+          )}
+          {view === 'report' && <ReportView revision={sync.revision} />}
+          {view === 'graph' && <GraphView kinds={kinds} revision={sync.revision} onOpen={openRecord} />}
+          {view === 'conflicts' && (
+            <Conflicts kinds={kinds} conflicts={conflicts} onChanged={afterChange} />
+          )}
+          {view === 'settings' && (
+            <Settings
+              kinds={kinds}
+              configured={configured}
+              sync={sync}
+              onSync={() => void runSync()}
+              onRefill={refillServer}
+              onStatusChanged={onStatusChanged}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
