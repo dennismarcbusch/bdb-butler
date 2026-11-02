@@ -74,17 +74,6 @@ export interface Stammdaten {
   smtp_password_set: boolean;
 }
 
-export interface ImportReport {
-  stammdaten: string;
-  trips_imported: number;
-  trips_skipped: number;
-  attachments_imported: number;
-  attachments_skipped: number;
-  files_copied: number;
-  warnings: string[];
-  errors: string[];
-}
-
 export interface McpState {
   enabled: boolean;
   port: number;

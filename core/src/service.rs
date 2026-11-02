@@ -744,8 +744,8 @@ impl Service {
 
     /// Speichern durch die Anwendung selbst: erlaubt auch interne Felder. Nie mit Eingaben von Oberfläche oder KI
     /// aufrufen, sonst ließen sich zum Beispiel Dateipfade auf fremde Dateien im Ordner umbiegen.
-    pub(crate) fn save_trusted(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>, upsert: bool) -> Result<String> {
-        self.save_inner(kind, id, values, upsert, true)
+    pub(crate) fn save_trusted(&mut self, kind: &str, id: Option<&str>, values: &Map<String, Value>) -> Result<String> {
+        self.save_inner(kind, id, values, false, true)
     }
 
     fn save_inner(

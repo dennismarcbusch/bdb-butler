@@ -4,7 +4,6 @@ import { messageOf } from '../errors';
 import type { Config, KindDef, SyncReport } from '../types';
 import type { SyncState } from '../useSync';
 import { McpSettings } from './McpSettings';
-import { ImportSettings } from './ImportSettings';
 import { StammdatenSettings } from './StammdatenSettings';
 
 interface Props {
@@ -162,8 +161,6 @@ export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusCh
       </div>
 
       <StammdatenSettings kinds={kinds} />
-
-      <ImportSettings />
 
       <McpSettings kinds={kinds} />
 

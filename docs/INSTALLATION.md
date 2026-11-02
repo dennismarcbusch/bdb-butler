@@ -12,11 +12,10 @@ Diese Anleitung führt durch die Einrichtung des BdB-Butlers: Sync-Server, App, 
 6. [Weitere Rechner verbinden](#6-weitere-rechner-verbinden)
 7. [Ordner für PDFs und Anhänge](#7-ordner-für-pdfs-und-anhänge)
 8. [Dienstreisen: Stammdaten und Mail](#8-dienstreisen-stammdaten-und-mail)
-9. [Daten aus dem alten Dienstreisebuster übernehmen](#9-daten-aus-dem-alten-dienstreisebuster-übernehmen)
-10. [KI-Zugriff (MCP) einrichten](#10-ki-zugriff-mcp-einrichten)
-11. [Sicherung und Wiederherstellung](#11-sicherung-und-wiederherstellung)
-12. [Updates](#12-updates)
-13. [Fehlersuche](#13-fehlersuche)
+9. [KI-Zugriff (MCP) einrichten](#9-ki-zugriff-mcp-einrichten)
+10. [Sicherung und Wiederherstellung](#10-sicherung-und-wiederherstellung)
+11. [Updates](#11-updates)
+12. [Fehlersuche](#12-fehlersuche)
 
 ## 1. Überblick: Was du brauchst
 
@@ -411,24 +410,11 @@ Unter **Einstellungen, Stammdaten für Dienstreisen** trägst du einmal ein, was
 
 Beim Versand zeigt die App Betreff, Text und Anhänge zur Kontrolle. Die Mail darf mit Anhängen höchstens 20 MB groß werden. Weil Anhänge in der Mail etwa ein Drittel größer sind als die Dateien, passen etwa 14,6 MB an Dateien hinein. Die Ansicht zeigt beide Größen.
 
-## 9. Daten aus dem alten Dienstreisebuster übernehmen
-
-Der Import übernimmt Stammdaten (mit Unterschrift und SMTP-Passwort), Reisen, Dateien und Anhänge aus dem alten Django-Tool. Das alte Tool bleibt dabei unverändert, Dateien werden kopiert.
-
-1. Kopiere vom Server des alten Tools die Datei `data/db.sqlite3` und den Ordner `data/media` auf den Rechner, zum Beispiel per `scp -r`. Am besten hältst du den Docker-Container vorher an (`docker compose stop`), damit die Datenbank in einem festen Zustand ist.
-2. Trag in der App zuerst den Ordner für PDFs und Anhänge ein (Abschnitt 7).
-3. **Einstellungen, Import aus dem alten Dienstreisebuster:** die Pfade zu `db.sqlite3` und zum Ordner `media` eintragen, dann **„Importieren“**.
-4. Der Bericht zeigt, was übernommen, übersprungen oder nicht gefunden wurde. Zeiten werden von UTC in deutsche Zeit umgerechnet.
-
-Ein erneuter Import überspringt bereits Übernommenes und überschreibt nichts. Bereits ausgefüllte Stammdaten bleiben unangetastet. Führe den Import auf **einem** Rechner aus und gleiche dann ab. Die anderen Rechner bekommen die Einträge über den Server und die Dateien über Nextcloud.
-
-Anschließend die kopierten Dateien des alten Tools löschen, denn sie enthalten das SMTP-Passwort und die Bankverbindung im Klartext.
-
-## 10. KI-Zugriff (MCP) einrichten
+## 9. KI-Zugriff (MCP) einrichten
 
 Die App enthält einen lokalen MCP-Server, über den eine KI auf deine Einträge zugreifen kann. Er läuft nur, solange die App läuft **und entsperrt ist**, und ist nur vom eigenen Rechner aus erreichbar (`127.0.0.1`).
 
-### 10.1 In der App einschalten
+### 9.1 In der App einschalten
 
 **Einstellungen, KI-Zugriff (MCP)** (nur bei entsperrter App):
 
@@ -437,7 +423,7 @@ Die App enthält einen lokalen MCP-Server, über den eine KI auf deine Einträge
 3. **Typen mit Personenbezug** (Ansprechpartner, beratene Personen, Protokolle) sind gesperrt. Gib sie nur frei, wenn du das bewusst willst. Die Datenschutzfreigabe deckt den Zugriff ab, du achtest selbst darauf, dass über die KI keine personenbezogenen Daten verarbeitet werden.
 4. Die App zeigt Adresse, Token und einen fertigen Befehl für Claude Code. Über **„Neues Token erzeugen“** machst du alte Zugänge ungültig.
 
-### 10.2 Claude Code verbinden
+### 9.2 Claude Code verbinden
 
 Den angezeigten Befehl ausführen, etwa:
 
@@ -447,7 +433,7 @@ claude mcp add --transport http bdb-butler http://127.0.0.1:8765/mcp --header "A
 
 Andere MCP-Clients, die Streamable HTTP mit eigenem Kopf `Authorization` beherrschen, verbindest du mit derselben Adresse und demselben Token.
 
-### 10.3 Was die KI sieht
+### 9.3 Was die KI sieht
 
 - Werkzeuge: `list_kinds`, `list_records`, `get_record`, `search`; mit Schreibzugriff `create_record` und `update_record`.
 - Gesperrte Typen bleiben auch per ID und Suche unsichtbar. Verweise (IDs) auf sie können in anderen Einträgen stehen, ihre Inhalte nicht.
@@ -455,12 +441,12 @@ Andere MCP-Clients, die Streamable HTTP mit eigenem Kopf `Authorization` beherrs
 - Jeder Aufruf steht im Protokoll (Einstellungen, KI-Zugriff), ohne Inhalte.
 - Ist die App gesperrt, antwortet der Server mit „Die App ist gesperrt. Bitte in der App entsperren.“
 
-## 11. Sicherung und Wiederherstellung
+## 10. Sicherung und Wiederherstellung
 
 | Was | Wie sichern | Wiederherstellen |
 |---|---|---|
 | **Recovery-Key** | offline, ausgedruckt oder abgeschrieben | Entsperren mit dem Recovery-Key auf dem Sperrbildschirm |
-| **Server-Datenbank** | regelmäßig `/var/lib/bdbb/bdbb.db` sichern (Chiffretext, darf auch auf weniger vertrauenswürdige Ziele) | zurückspielen und neu befüllen (Abschnitt 11.1) |
+| **Server-Datenbank** | regelmäßig `/var/lib/bdbb/bdbb.db` sichern (Chiffretext, darf auch auf weniger vertrauenswürdige Ziele) | zurückspielen und neu befüllen (Abschnitt 10.1) |
 | **Ordner für PDFs und Anhänge** | über Nextcloud (Versionen, Papierkorb) und die übliche Nextcloud-Sicherung | aus Nextcloud |
 | Lokaler Datenordner eines Rechners | nicht nötig, solange der Server läuft | App neu installieren und mit dem Tresor verbinden (Abschnitt 6) |
 
@@ -472,7 +458,7 @@ sqlite3 /var/lib/bdbb/bdbb.db ".backup '/var/backups/bdbb-$(date +%F).db'"
 
 Alternativ den Dienst kurz anhalten (`systemctl stop bdbb`), die Datei kopieren und wieder starten.
 
-### 11.1 Server nach einem Verlust wieder in Betrieb nehmen
+### 10.1 Server nach einem Verlust wieder in Betrieb nehmen
 
 Jeder Rechner hat den vollständigen Stand. Solange einer davon intakt ist, gehen keine Daten verloren, auch wenn der Server leer ist oder nur eine ältere Sicherung hat. Die Rechner merken sich aber, bis zu welcher Folgenummer sie den Server kennen. Passt der Server nicht mehr dazu, bricht der Abgleich ab, bevor er etwas einspielt oder sendet, und meldet zum Beispiel „Der Server ist leer …“ oder „Der Server hat einen älteren Stand als dieser Rechner …“.
 
@@ -500,11 +486,11 @@ So nimmst du den Server wieder in Betrieb:
 2. Auf **einem** Rechner, am besten dem, auf dem du zuletzt gearbeitet hast: Einstellungen, Abgleich, „Jetzt abgleichen“. Die App erkennt den Verlust und zeigt „Server neu befüllen“. Nach der Bestätigung sendet sie ihren ganzen Stand. Liegt eine ältere Sicherung auf dem Server, wird sie je Feld zusammengeführt: Die jüngere Änderung gewinnt, also der Stand der Rechner. Der Keyring dieses Rechners ersetzt den der Sicherung, damit gilt sein Master-Passwort.
 3. Auf **jedem weiteren** Rechner: abgleichen. Die App meldet „Ein anderer Rechner hat den Server neu befüllt“ und bietet ebenfalls „Server neu befüllen“ an. Nach der Bestätigung übernimmt sie den Keyring des Servers und sendet ihre Einträge. Was dort offline geändert wurde, kommt dazu. Gleiche Werte ergeben keine Konflikte.
 
-Bis alle Rechner das getan haben, können sie offline ohne Einschränkung weiterarbeiten. Ein Rechner mit älterer App-Fassung erkennt den neu befüllten Server nicht sicher. Aktualisiere deshalb alle Rechner, bevor du den Server neu befüllst (Abschnitt 12).
+Bis alle Rechner das getan haben, können sie offline ohne Einschränkung weiterarbeiten. Ein Rechner mit älterer App-Fassung erkennt den neu befüllten Server nicht sicher. Aktualisiere deshalb alle Rechner, bevor du den Server neu befüllst (Abschnitt 11).
 
 Die Sicherung der Server-Datenbank ist die Notfallkopie für den Fall, dass kein Rechner mehr intakt ist: Mit ihr und dem Recovery-Key lässt sich ein neuer Rechner einrichten (Abschnitt 6). Solange ein Rechner intakt ist, reicht dagegen auch ein leerer Server. Proxmox-Sicherungen des Containers schaden nicht.
 
-## 12. Updates
+## 11. Updates
 
 **Server unter Alpine mit Skript (Abschnitt 2.5):** `sh install-alpine.sh https://butler.example.de` erneut ausführen.
 
@@ -520,7 +506,7 @@ systemctl restart bdbb
 
 **App:** im Repository den neuen Stand holen und neu bauen (Abschnitt 3.2), dann das neue Paket installieren. Die Daten im Datenordner bleiben erhalten. Aktualisiere am besten alle Rechner zeitnah: Ein Rechner mit älterer App überspringt Einträge im neueren Format und meldet sie, bis er aktualisiert ist.
 
-## 13. Fehlersuche
+## 12. Fehlersuche
 
 | Meldung oder Verhalten | Ursache und Abhilfe |
 |---|---|
@@ -528,8 +514,8 @@ systemctl restart bdbb
 | „Server nicht erreichbar“ | Adresse prüfen (mit `https://`), `curl https://butler.example.de/healthz`, Caddy und `systemctl status bdbb` prüfen (Alpine: `rc-service bdbb status`, Protokoll in `/var/log/bdbb/bdbb.log`) |
 | „Auf dem Server liegt ein anderer Tresor als lokal“ | Der Rechner hat offline einen eigenen Tresor angelegt, auf dem Server liegt schon einer. Den lokalen Datenordner entfernen (Abschnitt 4) und mit „Mit vorhandenem Tresor verbinden“ neu einrichten. Achtung: Was nur lokal existierte, geht dabei verloren |
 | Hinweis „neuerer Keyring, dessen Prüfsumme nicht passt“ | Der Keyring auf dem Server stammt nicht von diesem Tresor oder von einer älteren App-Fassung. Alle Rechner aktualisieren und das Passwort auf einem davon neu setzen. Tritt das ohne Passwortwechsel auf, den Server prüfen |
-| „Der Server ist leer, er hat seinen Bestand verloren“ | Der Server wurde neu aufgesetzt oder seine Datenbank ist weg. In den Einstellungen unter Abgleich „Server neu befüllen“ wählen (Abschnitt 11.1) |
-| „Der Server hat einen älteren Stand als dieser Rechner“ | Eine ältere Sicherung wurde zurückgespielt. „Server neu befüllen“ wählen, die neueren Stände der Rechner gewinnen (Abschnitt 11.1). Tritt das ohne Zurückspielen auf, den Server prüfen (richtige Datenbank in `BDBB_DB`?) |
+| „Der Server ist leer, er hat seinen Bestand verloren“ | Der Server wurde neu aufgesetzt oder seine Datenbank ist weg. In den Einstellungen unter Abgleich „Server neu befüllen“ wählen (Abschnitt 10.1) |
+| „Der Server hat einen älteren Stand als dieser Rechner“ | Eine ältere Sicherung wurde zurückgespielt. „Server neu befüllen“ wählen, die neueren Stände der Rechner gewinnen (Abschnitt 10.1). Tritt das ohne Zurückspielen auf, den Server prüfen (richtige Datenbank in `BDBB_DB`?) |
 | „Ein anderer Rechner hat den Server neu befüllt“ | Auch auf diesem Rechner „Server neu befüllen“ wählen. Danach gilt das Master-Passwort des Rechners, der zuerst neu befüllt hat |
 | „Ein anderer Rechner hat den Server gerade neu befüllt. Bitte … noch einmal wählen“ | Zwei Rechner haben gleichzeitig neu befüllt. Einfach noch einmal „Server neu befüllen“ wählen |
 | Hinweis „Einträge ließen sich nicht einspielen“ | Ein Eintrag ist beschädigt oder stammt von einer neueren App-Fassung. Diese App aktualisieren. Der Abgleich läuft für alle anderen Einträge weiter |

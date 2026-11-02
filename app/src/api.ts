@@ -1,4 +1,4 @@
-import type { AuditEntry, Config, ImportReport, JsonValue, KindDef, MailDraft, McpState, RecordView, Stammdaten, Status, SyncReport } from './types';
+import type { AuditEntry, Config, JsonValue, KindDef, MailDraft, McpState, RecordView, Stammdaten, Status, SyncReport } from './types';
 
 /** Fehler des Kerns mit stabilem Code (zum Beispiel `locked`, `wrong_secret`, `network`). */
 export class BackendError extends Error {
@@ -118,7 +118,6 @@ export const api = {
   mailDraft: (id: string, kind: 'antrag' | 'abrechnung') => call<MailDraft>('mail_draft', { id, kind }),
   mailSend: (id: string, kind: 'antrag' | 'abrechnung', subject: string, body: string, attachments: string[]) =>
     call<null>('mail_send', { id, kind, subject, body, attachments }),
-  importDjango: (db: string, media: string) => call<ImportReport>('import_django', { db, media }),
   reportSave: (name: string, content: string) => call<{ path: string }>('report_save', { name, content }),
   mcpGet: () => call<McpState>('mcp_get'),
   mcpSet: (enabled: boolean, port: number, write: boolean, allowPersonal: string[]) =>

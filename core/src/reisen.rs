@@ -306,7 +306,7 @@ impl Service {
 
     fn set_trip_fields(&mut self, id: &str, values: Value) -> Result<()> {
         let map = values.as_object().cloned().unwrap_or_default();
-        self.save_trusted("reise", Some(id), &map, false).map(|_| ())
+        self.save_trusted("reise", Some(id), &map).map(|_| ())
     }
 
     /// Ersetzt die Datei in einem Feld der Reise: schreibt die neue, merkt sie sich und löscht die alte.
@@ -403,7 +403,7 @@ impl Service {
         if let Some(b) = beilegen {
             fields.insert("beilegen".into(), json!(b));
         }
-        match self.save_trusted("anhang", None, &fields, false) {
+        match self.save_trusted("anhang", None, &fields) {
             Ok(id) => Ok(id),
             Err(e) => {
                 // Die Datei bleibt nicht ohne Eintrag liegen.

@@ -47,7 +47,6 @@ Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Inst
 - Der **Fahrkartenpreis** wird aus PDF-Fahrkarten vorgeschlagen (eine Heuristik, du übernimmst ihn selbst).
 - **Mailversand** direkt vom Rechner per SMTP: der Antrag an die Verwaltung, die Abrechnung an das LfF mit auswählbaren Anhängen. Nach dem Versand wechselt der Status.
 - Alle PDFs und Anhänge liegen in einem Ordner, den Nextcloud (oder ein anderes Werkzeug) zwischen den Rechnern synchronisiert.
-- **Import** aus dem alten Django-Tool „Dienstreisebuster“ (Stammdaten, Reisen, Dateien, Anhänge).
 
 ### Fortbildungen
 
@@ -66,7 +65,7 @@ Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Inst
 - Abgeglichen wird beim Entsperren, kurz nach jeder Änderung und auf Knopfdruck („Jetzt abgleichen“ in den Einstellungen). Einen regelmäßigen Abgleich im Hintergrund gibt es nicht. Änderungen eines anderen Rechners kommen also spätestens beim nächsten dieser Anlässe an.
 - Ändern zwei Rechner verschiedene Felder desselben Eintrags, werden beide Änderungen übernommen.
 - Ändern sie dasselbe Feld, gewinnt die jüngere Änderung. Die andere Fassung bleibt als **Konflikt** erhalten und lässt sich mit einem Klick übernehmen. So geht kein Text stillschweigend verloren.
-- Verliert der Sync-Server seinen Bestand (neu aufgesetzt oder aus einer älteren Sicherung zurückgespielt), merkt die App das und bietet „Server neu befüllen“ an. Jeder Rechner hat den vollständigen Stand, neuere Stände der Rechner gewinnen (siehe [Sicherung](docs/INSTALLATION.md#11-sicherung-und-wiederherstellung)).
+- Verliert der Sync-Server seinen Bestand (neu aufgesetzt oder aus einer älteren Sicherung zurückgespielt), merkt die App das und bietet „Server neu befüllen“ an. Jeder Rechner hat den vollständigen Stand, neuere Stände der Rechner gewinnen (siehe [Sicherung](docs/INSTALLATION.md#10-sicherung-und-wiederherstellung)).
 
 ### KI-Zugriff (MCP)
 
@@ -105,7 +104,7 @@ Die Einzelheiten stehen in [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md).
 
 | Ordner | Sprache | Inhalt |
 |---|---|---|
-| `core/` | Rust | Bibliothek `bdb-core`: Krypto, Einträge und Zusammenführung, lokale SQLite-Datenbank, Sync-Client, Dienstschicht, JSON-Schnittstelle, Typdefinitionen, MCP-Server, PDF-Erzeugung, Mail, Import |
+| `core/` | Rust | Bibliothek `bdb-core`: Krypto, Einträge und Zusammenführung, lokale SQLite-Datenbank, Sync-Client, Dienstschicht, JSON-Schnittstelle, Typdefinitionen, MCP-Server, PDF-Erzeugung, Mail |
 | `app/src-tauri/` | Rust | Tauri-Hülle. Ein einziger Befehl `call` reicht alles an den Kern weiter, dazu `open_file` zum Öffnen geprüfter Dateien |
 | `app/src/` | TypeScript (Preact) | Oberfläche. Formulare entstehen aus den Typdefinitionen des Kerns |
 | `server/` | Go | Sync-Server: eine SQLite-Datei, vier Endpunkte, nur Chiffretext |
@@ -125,7 +124,6 @@ Die wichtigsten Dateien im Kern:
 | `mcp.rs` | lokaler MCP-Server mit Sperre für Personen-Typen |
 | `pdf.rs`, `dienstreise.rs` | Formulare ausfüllen, Unterschrift einsetzen, R001, FIBS und R002 |
 | `mail.rs`, `reisen.rs` | SMTP-Versand und Abläufe des Dienstreisemoduls |
-| `import.rs` | Import aus dem alten Django-Tool |
 
 ## Schnellstart für die Entwicklung
 
@@ -168,7 +166,7 @@ Die PDF-Tests prüfen gegen Referenzwerte aus der alten Python-Fassung (alle Fel
 
 - Läuft: alle oben genannten Module. Kern, Server und Oberfläche sind getestet, die Oberfläche im Browser gegen den echten Kern.
 - Die Tauri-Hülle kompiliert, ist aber unter Windows (WebView2) und Linux (WebKitGTK) noch nicht im Alltag geprüft.
-- Nicht gegen die Wirklichkeit geprüft: die TLS-Verbindung zu einem echten Mailserver, die Preiserkennung an echten Fahrkarten, der R002 durch die Behörde und der Import der echten Datenbank des alten Tools.
+- Nicht gegen die Wirklichkeit geprüft: die TLS-Verbindung zu einem echten Mailserver, die Preiserkennung an echten Fahrkarten und der R002 durch die Behörde.
 - Android (Tauri 2 oder PWA) ist nicht begonnen.
 
 ## Weitere Dokumentation

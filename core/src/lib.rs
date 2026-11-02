@@ -8,7 +8,6 @@ pub mod bridge;
 pub mod crypto;
 pub mod dienstreise;
 pub mod fortbildung;
-pub mod import;
 pub mod mail;
 pub mod mcp;
 pub mod pdf;
