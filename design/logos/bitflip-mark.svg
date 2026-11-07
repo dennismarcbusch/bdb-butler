@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-90 -90 180 180" width="180" height="180">
+<title>Bitflip Zeichen</title>
+<g stroke="#0B0F14" stroke-width="3.5" stroke-linejoin="round">
+<polygon points="0,-80 69.3,-40 0,0 -69.3,-40" fill="#FFD470"/>
+<polygon points="-69.3,40 0,80 0,0 -69.3,-40" fill="#FFB020"/>
+<polygon points="69.3,40 0,80 0,0 69.3,-40" fill="#E08A00"/>
+</g>
+<path transform="matrix(0.866 0.5 0 1 -69.3 40)" d="M 34 -54 L 56 -40 L 34 -26" fill="none" stroke="#0B0F14" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+<path transform="matrix(-0.866 0.5 0 1 69.3 40)" d="M 46 -24 L 70 -24" fill="none" stroke="#0B0F14" stroke-width="7" stroke-linecap="round"/>
+</svg>

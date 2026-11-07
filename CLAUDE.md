@@ -20,6 +20,15 @@ Anforderungen: `docs/ANFORDERUNGEN.md`. Architektur und Entscheidungen: `docs/AR
 - Geheimnisse (Master-Passwort, Recovery-Key, Datenschlüssel, Mail-Zugangsdaten, Token) werden nie protokolliert und nicht im Klartext gespeichert (Ausnahme: Mail-Zugangsdaten im Schlüsselbund des Betriebssystems).
 - Texte, Kommentare und Commit-Nachrichten auf Deutsch.
 
+## Design
+
+Das UI folgt dem Design **Bitflip** (Skill `bitflip`, Regelwerk `~/.claude/skills/bitflip/references/design.md`). Vor jeder UI-Arbeit den Skill laden.
+
+- Weißer Grund, genau eine Akzentfarbe Amber `#FFB020`; Amber nie als Text auf Weiß (dafür `#A85F00`), auf Amber steht Tinte.
+- JetBrains Mono (800) für Titel/Labels/Code, Inter für Fließtext; Titel enden mit Amber-Unterstrich.
+- Farben, Abstände, Radien nur aus `design/tokens.css` (Kopie aus dem Skill, keine eigenen Farben); Logo nur aus den Dateien in `design/logos/`, nie nachzeichnen.
+- Texte Deutsch, Du-Form, keine Emojis. Text-Kontrast mindestens 4,5:1.
+
 Repo: https://github.com/dennismarcbusch/bdb-butler
 
 Projektnotiz im Brain: `/vault/10-Projekte/BdB-Butler.md`

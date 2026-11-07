@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 130" width="520" height="130">
+<title>Bitflip Logo horizontal, für dunkle Flächen</title>
+<g transform="translate(65 65) scale(0.65)">
+<g stroke="#0B0F14" stroke-width="3.5" stroke-linejoin="round">
+<polygon points="0,-80 69.3,-40 0,0 -69.3,-40" fill="#FFD470"/>
+<polygon points="-69.3,40 0,80 0,0 -69.3,-40" fill="#FFB020"/>
+<polygon points="69.3,40 0,80 0,0 69.3,-40" fill="#E08A00"/>
+</g>
+<path transform="matrix(0.866 0.5 0 1 -69.3 40)" d="M 34 -54 L 56 -40 L 34 -26" fill="none" stroke="#0B0F14" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+<path transform="matrix(-0.866 0.5 0 1 69.3 40)" d="M 46 -24 L 70 -24" fill="none" stroke="#0B0F14" stroke-width="7" stroke-linecap="round"/>
+</g>
+<text x="140" y="84" font-family="'JetBrains Mono', ui-monospace, monospace" font-weight="700" font-size="68" letter-spacing="-3.4" fill="#FFFFFF">bit<tspan fill="#FFB020">flip_</tspan></text>
+</svg>
