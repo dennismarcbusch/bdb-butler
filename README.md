@@ -8,6 +8,8 @@ Desktop-App für die Arbeit als mBdB: Dienstreisen, Schulen und Ansprechpartner,
 
 Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Installer für Windows und Ubuntu baut GitHub Actions (Workflow „Bauen“, siehe [Abschnitt 3.0](docs/INSTALLATION.md#30-bauen-auf-github)).
 
+**Download:** [Releases](https://github.com/dennismarcbusch/bdb-butler/releases) (Installer und Server-Datei, nach dem Veröffentlichen des Entwurfs) oder [Läufe des Workflows „Bauen“](https://github.com/dennismarcbusch/bdb-butler/actions/workflows/build.yml) (unten auf der Seite eines Laufs unter „Artifacts“).
+
 ## Inhalt
 
 - [Funktionen](#funktionen)

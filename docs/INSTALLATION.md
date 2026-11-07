@@ -241,6 +241,11 @@ Am einfachsten baut GitHub die App für dich (3.0). Selbst bauen (3.1 und 3.2) g
 
 Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub für Windows und Ubuntu und den Sync-Server für Linux, nachdem die Tests durchgelaufen sind. Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
 
+**Direkte Links:**
+
+- Fertige Releases: <https://github.com/dennismarcbusch/bdb-butler/releases> (ein Release-Entwurf ist nur für den Repository-Besitzer sichtbar, bis er veröffentlicht ist)
+- Läufe des Workflows „Bauen“ mit den Artifacts: <https://github.com/dennismarcbusch/bdb-butler/actions/workflows/build.yml>
+
 **Einzelner Bau:**
 
 1. Auf GitHub im Repository **Actions** öffnen und links den Workflow **„Bauen“** wählen.
@@ -262,7 +267,7 @@ Die Dateien unter Artifacts hält GitHub 90 Tage vor.
    git push origin v0.1.0
    ```
 
-3. Der Workflow baut und legt unter **Releases** einen **Entwurf** mit allen Installern und der Server-Datei (`bdbb-server-linux-amd64`, `-arm64`, Prüfsummen in `SHA256SUMS-server.txt`) an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen, und das Installationsskript für Alpine (2.5) nimmt die Server-Datei von dort.
+3. Der Workflow baut und legt unter [**Releases**](https://github.com/dennismarcbusch/bdb-butler/releases) einen **Entwurf** mit allen Installern und der Server-Datei (`bdbb-server-linux-amd64`, `-arm64`, Prüfsummen in `SHA256SUMS-server.txt`) an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen, und das Installationsskript für Alpine (2.5) nimmt die Server-Datei von dort.
 
 Bei jedem Push auf `main` und bei Pull Requests laufen nur die Tests, ohne zu bauen.
 
