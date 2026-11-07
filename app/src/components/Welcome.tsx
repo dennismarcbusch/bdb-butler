@@ -57,7 +57,7 @@ export function Welcome({ onCreated, onJoined }: Props) {
   return (
     <main class="center">
       <form class="card" onSubmit={submit}>
-        <h1>BdB-Butler</h1>
+        <h1 class="brand">BdB-Butler</h1>
         <p class="muted">
           Alle Daten werden auf diesem Rechner mit deinem Master-Passwort verschlüsselt. Der Server sieht nur Chiffretext.
         </p>

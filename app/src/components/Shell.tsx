@@ -106,7 +106,7 @@ export function Shell({ configured, onStatusChanged }: Props) {
   return (
     <div class="shell">
       <aside class="sidebar">
-        <h1>BdB-Butler</h1>
+        <h1 class="brand">BdB-Butler</h1>
         <nav aria-label="Bereiche">
           {kinds.filter((k) => !k.hidden).map((k) => (
             <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>

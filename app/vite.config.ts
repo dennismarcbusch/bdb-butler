@@ -11,6 +11,8 @@ export default defineConfig({
   server: {
     port: Number(process.env.BDB_DEV_PORT ?? 5173),
     strictPort: true,
+    // Die Bitflip-Tokens und Logos liegen im Ordner `design/` neben `app/`.
+    fs: { allow: ['..'] },
     proxy: { '/api': { target: bridge } },
   },
   build: { target: 'es2022' },

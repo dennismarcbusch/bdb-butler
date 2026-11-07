@@ -30,7 +30,7 @@ export function App() {
     return (
       <main class="center">
         <div class="card">
-          <h1>BdB-Butler</h1>
+          <h1 class="brand">BdB-Butler</h1>
           <p class="error" role="alert">{fatal}</p>
           <button type="button" onClick={() => void refresh()}>Erneut versuchen</button>
         </div>

@@ -27,7 +27,7 @@ export function Unlock({ onUnlocked }: { onUnlocked: () => void }) {
   return (
     <main class="center">
       <form class="card" onSubmit={submit}>
-        <h1>BdB-Butler</h1>
+        <h1 class="brand">BdB-Butler</h1>
         <p class="muted">Die App ist gesperrt.</p>
         <label>
           {useRecovery ? 'Recovery-Key' : 'Master-Passwort'}
