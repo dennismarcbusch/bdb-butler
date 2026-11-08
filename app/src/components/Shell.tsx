@@ -108,27 +108,33 @@ export function Shell({ configured, onStatusChanged }: Props) {
       <aside class="sidebar">
         <h1 class="brand">BdB-Butler</h1>
         <nav aria-label="Bereiche">
-          {kinds.filter((k) => !k.hidden).map((k) => (
-            <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
-              <span class="nav-label">{k.label_plural}</span>
-              {k.kind === 'auftrag' && <NavCount count={overdue} text={`${overdue} überfällig`} tone="danger" />}
-              {k.kind === 'bedarf' && <NavCount count={openRequests} text={`${openRequests} offen`} />}
+          <div class="nav-group" role="group" aria-labelledby="nav-content-label">
+            <span id="nav-content-label" class="nav-kicker">Inhalt</span>
+            {kinds.filter((k) => !k.hidden).map((k) => (
+              <button key={k.kind} type="button" class={view === k.kind ? 'active' : ''} onClick={() => setView(k.kind)}>
+                <span class="nav-label">{k.label_plural}</span>
+                {k.kind === 'auftrag' && <NavCount count={overdue} text={`${overdue} überfällig`} tone="danger" />}
+                {k.kind === 'bedarf' && <NavCount count={openRequests} text={`${openRequests} offen`} />}
+              </button>
+            ))}
+            <hr class="nav-separator" aria-hidden="true" />
+            <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>
+              Graph
             </button>
-          ))}
-          <hr class="nav-separator" aria-hidden="true" />
-          <button type="button" class={view === 'graph' ? 'active' : ''} onClick={() => setView('graph')}>
-            Graph
-          </button>
-          <button type="button" class={view === 'report' ? 'active' : ''} onClick={() => setView('report')}>
-            Tätigkeitsbericht
-          </button>
-          <button type="button" class={view === 'conflicts' ? 'active' : ''} onClick={() => setView('conflicts')}>
-            <span class="nav-label">Konflikte</span>
-            <NavCount count={conflicts.length} text={String(conflicts.length)} tone="danger" />
-          </button>
-          <button type="button" class={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
-            Einstellungen
-          </button>
+            <button type="button" class={view === 'report' ? 'active' : ''} onClick={() => setView('report')}>
+              Tätigkeitsbericht
+            </button>
+          </div>
+          <div class="nav-group nav-system" role="group" aria-labelledby="nav-system-label">
+            <span id="nav-system-label" class="nav-kicker">System</span>
+            <button type="button" class={view === 'conflicts' ? 'active' : ''} onClick={() => setView('conflicts')}>
+              <span class="nav-label">Konflikte</span>
+              <NavCount count={conflicts.length} text={String(conflicts.length)} tone="danger" />
+            </button>
+            <button type="button" class={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
+              Einstellungen
+            </button>
+          </div>
         </nav>
         <div class="sidebar-actions">
           <span class="sync-status" role="status" data-testid="sync-status">

@@ -18,6 +18,14 @@ interface Props {
 
 const MIN_PASSWORD = 10;
 
+/** Abschnitte der Seite, in der Reihenfolge von oben nach unten. */
+const SECTIONS = [
+  { id: 'einstellungen-abgleich', label: 'Server und Abgleich' },
+  { id: 'einstellungen-stammdaten', label: 'Stammdaten' },
+  { id: 'einstellungen-ki', label: 'KI-Zugriff' },
+  { id: 'einstellungen-sicherheit', label: 'Sicherheit' },
+] as const;
+
 export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusChanged }: Props) {
   const [config, setConfig] = useState<Config | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -30,9 +38,39 @@ export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusCh
   const [confirmRefill, setConfirmRefill] = useState(false);
   const [refillMessage, setRefillMessage] = useState<string | null>(null);
 
+  const [activeSection, setActiveSection] = useState<string>(SECTIONS[0].id);
+  const loaded = config !== null;
+
   useEffect(() => {
     api.configGet().then(setConfig, (e) => setError(messageOf(e)));
   }, []);
+
+  // Hervorhebung im Abschnittsmenü folgt dem Scrollen: aktiv ist der oberste Abschnitt, der im Sichtfenster beginnt.
+  useEffect(() => {
+    if (!loaded || typeof IntersectionObserver === 'undefined') return;
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) visible.add(entry.target.id);
+          else visible.delete(entry.target.id);
+        }
+        const first = SECTIONS.find((s) => visible.has(s.id));
+        if (first) setActiveSection(first.id);
+      },
+      { rootMargin: '0px 0px -60% 0px' },
+    );
+    for (const s of SECTIONS) {
+      const el = document.getElementById(s.id);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [loaded]);
+
+  function goTo(id: string) {
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   if (!config) return <p>{error ?? 'Lade …'}</p>;
 
@@ -90,6 +128,23 @@ export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusCh
     <section class="settings">
       <h2>Einstellungen</h2>
 
+      <div class="settings-layout">
+        <div class="settings-nav" role="group" aria-label="Abschnitte der Einstellungen">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              class={activeSection === s.id ? 'active' : ''}
+              aria-current={activeSection === s.id ? 'true' : undefined}
+              onClick={() => goTo(s.id)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        <div class="settings-sections">
+      <section id="einstellungen-abgleich" class="settings-section" aria-label="Server und Abgleich">
       <form onSubmit={save}>
         <h3>Server und Ordner</h3>
         <label>
@@ -160,10 +215,17 @@ export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusCh
         )}
       </div>
 
-      <StammdatenSettings kinds={kinds} />
+      </section>
 
-      <McpSettings kinds={kinds} />
+      <section id="einstellungen-stammdaten" class="settings-section">
+        <StammdatenSettings kinds={kinds} />
+      </section>
 
+      <section id="einstellungen-ki" class="settings-section">
+        <McpSettings kinds={kinds} />
+      </section>
+
+      <section id="einstellungen-sicherheit" class="settings-section" aria-label="Sicherheit">
       <form onSubmit={changePassword}>
         <h3>Master-Passwort ändern</h3>
         <label>
@@ -184,6 +246,9 @@ export function Settings({ kinds, configured, sync, onSync, onRefill, onStatusCh
           <button type="submit">Passwort ändern</button>
         </div>
       </form>
+      </section>
+        </div>
+      </div>
     </section>
   );
 }
