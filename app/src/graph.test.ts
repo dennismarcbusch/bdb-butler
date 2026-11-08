@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGraph, layout, neighbors, related, titleIndex, type Graph } from './graph';
+import { buildGraph, dropWithOrphans, layout, neighbors, related, titleIndex, type Graph } from './graph';
 import type { KindDef, RecordView } from './types';
 
 const kinds: KindDef[] = [
@@ -194,5 +194,53 @@ describe('layout', () => {
     const g: Graph = { nodes: ['a', 'b', 'c'].map((id) => ({ id, kind: 'x', label: id })), edges: [] };
     const pos = layout(g);
     expect(new Set([...pos.values()].map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)).size).toBe(3);
+  });
+});
+
+describe('dropWithOrphans', () => {
+  it('entfernt Einträge und die, die nur an ihnen hängen', () => {
+    // p1 und p2 verweisen auch aufeinander und bleiben, p4 hat keine Verbindung.
+    expect(dropWithOrphans(records, kinds, new Set(['s1'])).map((r) => r.id)).toEqual(['s2', 'p1', 'p2', 'p3', 'p4']);
+    // p3 hängt nur an s2 und verschwindet mit ihr.
+    expect(dropWithOrphans(records, kinds, new Set(['s2'])).map((r) => r.id)).toEqual(['s1', 'p1', 'p2', 'p4']);
+  });
+
+  it('lässt alles unverändert, wenn nichts entfernt wird', () => {
+    expect(dropWithOrphans(records, kinds, new Set())).toBe(records);
+  });
+});
+
+describe('layout mit Gruppen', () => {
+  const mk = (id: string): RecordView => rec(id, 'schule', { name: id });
+  const many = [...'abcdef'].map((c) => mk(`g${c}`)).concat([...'abcdef'].map((c) => mk(`h${c}`)));
+  const graph = buildGraph(many, kinds);
+  const groups = new Map(many.map((r) => [r.id, r.id.startsWith('g') ? 'G' : 'H']));
+
+  const mean = (pos: Map<string, { x: number; y: number }>, pairs: [string, string][]) =>
+    pairs.reduce((s, [a, b]) => s + Math.hypot(pos.get(a)!.x - pos.get(b)!.x, pos.get(a)!.y - pos.get(b)!.y), 0) / pairs.length;
+
+  it('hält Knoten einer Gruppe näher beisammen als Knoten verschiedener Gruppen', () => {
+    const pos = layout(graph, { groups });
+    const within: [string, string][] = [];
+    const across: [string, string][] = [];
+    for (const a of many) {
+      for (const b of many) {
+        if (a.id >= b.id) continue;
+        (groups.get(a.id) === groups.get(b.id) ? within : across).push([a.id, b.id]);
+      }
+    }
+    expect(mean(pos, within)).toBeLessThan(mean(pos, across) * 0.7);
+  });
+
+  it('ist deterministisch und bleibt in der Fläche', () => {
+    const a = layout(graph, { groups, width: 800, height: 600 });
+    const b = layout(graph, { groups, width: 800, height: 600 });
+    expect([...a]).toEqual([...b]);
+    for (const p of a.values()) {
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(800);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y).toBeLessThanOrEqual(600);
+    }
   });
 });

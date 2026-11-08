@@ -131,6 +131,8 @@ pub const SCHULARTEN: &[&str] = &[
     "Sonstige",
 ];
 
+pub const TRAEGERSCHAFTEN: &[&str] = &["Staatlich", "Nichtstaatlich"];
+
 pub const BERATUNGSARTEN: &[&str] = &["Vor Ort", "Online", "Telefon", "Schriftlich"];
 
 pub const PROTOKOLLARTEN: &[&str] = &["Beratung", "Jour fixe", "Dienstbesprechung", "Sonstiges"];
@@ -178,6 +180,7 @@ pub fn kinds() -> Vec<KindDef> {
             fields: vec![
                 text("name", "Name", true),
                 choice("schulart", "Schulart", SCHULARTEN),
+                choice("traegerschaft", "Trägerschaft", TRAEGERSCHAFTEN),
                 text("schulnummer", "Schulnummer", false),
                 text("strasse", "Straße", false),
                 text("plz", "PLZ", false),

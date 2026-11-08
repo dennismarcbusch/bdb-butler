@@ -3,7 +3,18 @@ import { api } from '../api';
 import { messageOf } from '../errors';
 import { dueLabel, dueState, filterOrders, todayIso, type OrderFilter } from '../auftrag';
 import { matches, recordMeta, titleOf } from '../form';
+import {
+  NO_FILTER,
+  groupRecords,
+  matchesFilter,
+  optionsOf,
+  schoolMeta,
+  type Group,
+  type GroupChoice,
+  type SchoolFilter,
+} from '../gruppen';
 import type { KindDef, RecordView } from '../types';
+import { SchoolControls } from './SchoolControls';
 import { RecordForm } from './RecordForm';
 import { RelatedList } from './RelatedList';
 import { TrainingPanel } from './TrainingPanel';
@@ -35,6 +46,9 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
   const [error, setError] = useState<string | null>(null);
   // Zählt lokale Änderungen, damit „Verknüpfte Einträge“ danach neu lädt (nicht nur nach einem Abgleich).
   const [localChanges, setLocalChanges] = useState(0);
+  const [schoolGroup, setSchoolGroup] = useState<GroupChoice>('schulart');
+  const [schoolFilter, setSchoolFilter] = useState<SchoolFilter>(NO_FILTER);
+  const isSchools = kind.kind === 'schule';
   const isOrders = kind.kind === 'auftrag';
   const isTrips = kind.kind === 'reise';
   const today = todayIso();
@@ -53,7 +67,28 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
   }, [load, revision]);
 
   const byStatus = isTrips && tripStatus !== '' ? records.filter((r) => r.fields.status === tripStatus) : records;
-  const visible = (isOrders ? filterOrders(byStatus, orderFilter) : byStatus).filter((r) => matches(r, query));
+  const bySchool = isSchools ? byStatus.filter((r) => matchesFilter(r, schoolFilter)) : byStatus;
+  const visible = (isOrders ? filterOrders(bySchool, orderFilter) : bySchool).filter((r) => matches(r, query));
+  const groups: Group<RecordView>[] | null =
+    isSchools && schoolGroup !== 'none' ? groupRecords(visible, schoolGroup, optionsOf(kind, schoolGroup)) : null;
+
+  const item = (r: RecordView) => {
+    const meta = isSchools ? schoolMeta(r, schoolGroup) : isOrders ? '' : recordMeta(kind, r);
+    return (
+      <li key={r.id}>
+        <button type="button" class={selected === r.id ? 'active' : ''} onClick={() => setSelected(r.id)}>
+          {titleOf(kind, r)}
+          {!isOrders && meta !== '' && <span class="meta">{meta}</span>}
+          {isOrders && (
+            <span class={`meta due-${dueState(r, today)}`}>
+              {dueLabel(r, today)}
+              {typeof r.fields.status === 'string' && r.fields.status !== 'Erledigt' ? ` · ${r.fields.status}` : ''}
+            </span>
+          )}
+        </button>
+      </li>
+    );
+  };
   const current = selected && selected !== 'new' ? (records.find((r) => r.id === selected) ?? null) : null;
 
   return (
@@ -80,24 +115,32 @@ export function KindView({ kind, kinds, revision, initialSelected = null, onChan
             ))}
           </select>
         )}
+        {isSchools && (
+          <SchoolControls
+            kind={kind}
+            schools={records}
+            group={schoolGroup}
+            onGroup={setSchoolGroup}
+            filter={schoolFilter}
+            onFilter={setSchoolFilter}
+          />
+        )}
         <input type="search" placeholder="Suchen …" aria-label="Suchen" value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
         {error && <p class="error" role="alert">{error}</p>}
-        <ul>
-          {visible.map((r) => (
-            <li key={r.id}>
-              <button type="button" class={selected === r.id ? 'active' : ''} onClick={() => setSelected(r.id)}>
-                {titleOf(kind, r)}
-                {!isOrders && recordMeta(kind, r) !== '' && <span class="meta">{recordMeta(kind, r)}</span>}
-                {isOrders && (
-                  <span class={`meta due-${dueState(r, today)}`}>
-                    {dueLabel(r, today)}
-                    {typeof r.fields.status === 'string' && r.fields.status !== 'Erledigt' ? ` · ${r.fields.status}` : ''}
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
+        {groups ? (
+          <div class="groups">
+            {groups.map((g) => (
+              <details key={`${schoolGroup}:${g.label}`} class="group" open>
+                <summary>
+                  {g.label} <span class="count">{g.items.length}</span>
+                </summary>
+                <ul>{g.items.map(item)}</ul>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <ul>{visible.map(item)}</ul>
+        )}
         {visible.length === 0 && <p class="muted">{records.length === 0 ? 'Noch nichts angelegt.' : 'Keine Treffer.'}</p>}
       </section>
 

@@ -42,6 +42,7 @@ Die Projektnotiz im Brain (`/vault/10-Projekte/BdB-Butler.md`) spiegelt denselbe
 
 - Verwaltung der Schulen und ihrer Ansprechpartner.
 - Graph-Ansicht der Kontaktpersonenverwaltung ähnlich wie in SilverBullet: Kontaktpersonen und ihre Verknüpfungen, zum Beispiel zu Schulen, als Graph.
+- Schulen sind nach Schulart, Ort und Trägerschaft (staatlich, nichtstaatlich) gegliedert: in der Liste als Gruppen, im Graph als Gruppen mit Rahmen. Beide lassen sich nach diesen Merkmalen filtern.
 
 ### Beratungen und Protokolle
 
