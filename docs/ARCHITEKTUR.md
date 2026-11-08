@@ -126,6 +126,7 @@ Umgesetzt in `core/src/mcp.rs`, Einstellungen in der App unter „Einstellungen,
 | Entsperren | Master-Passwort und Recovery-Key |
 | KI | Lokaler MCP-Server im App-Prozess, von Anfang an |
 | PDFs und Anhänge | Ordner, per Nextcloud synchronisiert |
+| Verteilung der App | Bis auf Weiteres nur deb-Pakete (amd64), gebaut von GitHub Actions und als signierte apt-Paketquelle auf GitHub Pages (Branch `gh-pages`) bereitgestellt. rpm, AppImage (bringt WebKitGTK mit, sehr groß) und der Windows-Installer sind abgeschaltet. |
 
 Begründung für das eigene Sync-Protokoll: Es gibt genau einen Nutzer und wenig Daten. Die Schlüsselverwaltung (Master-Passwort und Recovery-Key) ist vorgegeben. Fertige Bausteine bringen eigene Schlüssel- und Servermodelle mit, die dazu nicht passen, und hängen von jungen Bibliotheken ab. Ein Protokoll mit einer Tabelle und drei Endpunkten ist überschaubar, gut zu testen und bleibt unter eigener Kontrolle.
 

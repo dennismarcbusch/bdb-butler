@@ -23,7 +23,7 @@ Diese Anleitung führt durch die Einrichtung des BdB-Butlers: Sync-Server, App, 
 |---|---|---|
 | Sync-Server | ein Linux-Rechner, zum Beispiel ein LXC-Container auf Proxmox | verteilt die verschlüsselten Daten zwischen deinen Rechnern |
 | Reverse-Proxy mit TLS | zum Beispiel ein vorhandener Caddy | HTTPS nach außen. Der Sync-Server selbst spricht nur HTTP |
-| App | jeder Rechner, auf dem du arbeitest (Windows oder Linux) | die eigentliche Anwendung |
+| App | jeder Rechner, auf dem du arbeitest (derzeit gebaut: Ubuntu und Debian als deb-Paket) | die eigentliche Anwendung |
 | Synchronisierter Ordner | Nextcloud-Client (oder ein anderes Werkzeug) auf jedem Rechner | PDFs und Anhänge der Dienstreisen und Berichte |
 
 Der Server ist **optional**. Ohne Server arbeitet die App auf einem einzelnen Rechner, und du kannst ihn später nachtragen. Für mehrere Rechner ist er nötig.
@@ -235,11 +235,13 @@ Hinweise:
 
 ## 3. App aus dem Quelltext bauen
 
-Am einfachsten baut GitHub die App für dich (3.0). Selbst bauen (3.1 und 3.2) geht ebenfalls, dann auf dem Zielsystem: Linux-Pakete unter Linux, den Windows-Installer unter Windows. WSL erzeugt Linux-Pakete, keinen Windows-Installer.
+Am einfachsten baut GitHub die App für dich (3.0) und stellt sie als apt-Paketquelle bereit (4.1). Selbst bauen (3.1 und 3.2) geht ebenfalls, dann auf dem Zielsystem: Linux-Pakete unter Linux, den Windows-Installer unter Windows. WSL erzeugt Linux-Pakete, keinen Windows-Installer.
+
+**Bis auf Weiteres baut der Workflow nur das deb-Paket** (Ubuntu und Debian, 64 Bit). Windows-Installer, rpm und AppImage sind abgeschaltet: Das AppImage bringt WebKitGTK mit und ist sehr groß, rpm und Windows werden nicht gebraucht. Wie man Windows wieder einschaltet, steht im Kopf von `.github/workflows/build.yml`.
 
 ### 3.0 Bauen auf GitHub
 
-Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub für Windows und Ubuntu und den Sync-Server für Linux, nachdem die Tests durchgelaufen sind. Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
+Der Workflow `.github/workflows/build.yml` baut die App auf einem Rechner von GitHub als deb-Paket für Ubuntu und den Sync-Server für Linux, nachdem die Tests durchgelaufen sind. Läuft der Bau auf `main` oder für ein Tag, aktualisiert er außerdem die apt-Paketquelle (4.1). Für ein öffentliches Repository ist das kostenlos, ein Lauf dauert etwa 15 bis 20 Minuten.
 
 **Direkte Links:**
 
@@ -250,7 +252,7 @@ Der Workflow `.github/workflows/build.yml` baut die App auf Rechnern von GitHub 
 
 1. Auf GitHub im Repository **Actions** öffnen und links den Workflow **„Bauen“** wählen.
 2. **„Run workflow“**, Branch `main`, dann wieder **„Run workflow“**.
-3. Ist der Lauf fertig (grüner Haken), unten auf seiner Seite unter **Artifacts** die Datei `BdB-Butler-Windows` oder `BdB-Butler-Ubuntu` herunterladen und entpacken. Darin liegen die Installer (Abschnitt 4).
+3. Ist der Lauf fertig (grüner Haken), unten auf seiner Seite unter **Artifacts** die Datei `BdB-Butler-Ubuntu` herunterladen und entpacken. Darin liegt das deb-Paket (Abschnitt 4). Ein Lauf auf `main` hat es außerdem in die apt-Paketquelle gelegt.
 
 Die Dateien unter Artifacts hält GitHub 90 Tage vor.
 
@@ -267,7 +269,7 @@ Die Dateien unter Artifacts hält GitHub 90 Tage vor.
    git push origin v0.1.0
    ```
 
-3. Der Workflow baut und legt unter [**Releases**](https://github.com/dennismarcbusch/bdb-butler/releases) einen **Entwurf** mit allen Installern und der Server-Datei (`bdbb-server-linux-amd64`, `-arm64`, Prüfsummen in `SHA256SUMS-server.txt`) an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen, und das Installationsskript für Alpine (2.5) nimmt die Server-Datei von dort.
+3. Der Workflow baut, aktualisiert die apt-Paketquelle (sie ist sofort für alle sichtbar, auch bevor du den Release veröffentlichst) und legt unter [**Releases**](https://github.com/dennismarcbusch/bdb-butler/releases) einen **Entwurf** mit dem deb-Paket und der Server-Datei (`bdbb-server-linux-amd64`, `-arm64`, Prüfsummen in `SHA256SUMS-server.txt`) an. Prüfen und auf **„Publish release“** klicken. Danach steht er dauerhaft auf der Repository-Seite zum Herunterladen, und das Installationsskript für Alpine (2.5) nimmt die Server-Datei von dort.
 
 Bei jedem Push auf `main` und bei Pull Requests laufen nur die Tests, ohne zu bauen.
 
@@ -308,14 +310,14 @@ npm ci
 ```
 
 ```bash
-npm run tauri build
+npm run tauri build -- --bundles deb
 ```
 
 Der erste Bau dauert einige Minuten. Die Pakete liegen danach unter `target/release/bundle/` im Hauptordner des Repositorys:
 
 | System | Pakete |
 |---|---|
-| Linux | `deb/*.deb`, `rpm/*.rpm`, `appimage/*.AppImage` |
+| Linux | `deb/*.deb` (mit `npm run tauri build -- --bundles deb`; ohne den Zusatz entstehen auch `rpm` und `AppImage`). Tauri nennt das Paket `bd-b-butler`; `sh ../app/deploy/rename-deb.sh ../target/release/bundle/deb/*.deb` im Ordner `app` macht `bdb-butler` daraus, wie es der Workflow tut |
 | Windows | `msi/*.msi`, `nsis/*-setup.exe` |
 
 Vor dem Bauen kannst du prüfen, ob alles in Ordnung ist (siehe [README](../README.md#tests)):
@@ -326,17 +328,67 @@ cargo test -p bdb-core
 
 ## 4. App installieren
 
-**Linux (Debian, Ubuntu):**
+**Linux (Ubuntu, Debian), empfohlen: über die apt-Paketquelle.** Die App wird dann mit `apt upgrade` zusammen mit dem restlichen System aktualisiert. Einmalig die Paketquelle eintragen (der Schlüssel liegt auf der Pages-Seite des Repositorys):
 
-Im Ordner mit dem heruntergeladenen Paket (beim eigenen Bau `target/release/bundle/deb/`):
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+```
+
+```bash
+sudo curl -fsSL -o /etc/apt/keyrings/bdb-butler.gpg https://dennismarcbusch.github.io/bdb-butler/bdb-butler.gpg
+```
+
+```bash
+echo "deb [signed-by=/etc/apt/keyrings/bdb-butler.gpg] https://dennismarcbusch.github.io/bdb-butler stable main" | sudo tee /etc/apt/sources.list.d/bdb-butler.list
+```
+
+Danach installieren:
+
+```bash
+sudo apt update
+```
+
+```bash
+sudo apt install bdb-butler
+```
+
+Das Paket gibt es nur für 64-Bit-PCs (`amd64`). Die Paketquelle ist mit einem eigenen Schlüssel signiert, `apt` prüft die Signatur bei jedem `apt update`. Sie hält die letzten drei Versionen vor (zum Zurückgehen: `sudo apt install bdb-butler=<Version>`). Die Pakete selbst sind nicht anderweitig signiert.
+
+**Linux, einzelne Datei:** Im Ordner mit dem heruntergeladenen Paket (aus dem Release, aus den Artifacts oder beim eigenen Bau `target/release/bundle/deb/`):
 
 ```bash
 sudo apt install ./*_amd64.deb
 ```
 
-Alternativ das AppImage ausführbar machen und starten (`chmod +x`, keine Installation nötig).
+Auf diesem Weg gibt es keine automatischen Updates.
 
-**Windows:** Den Installer ausführen: `BdB-Butler_…_x64-setup.exe` (empfohlen) oder `…_x64_en-US.msi`, aus dem Download von GitHub oder beim eigenen Bau aus `target/release/bundle/nsis/` beziehungsweise `msi/`. Da die Pakete nicht signiert sind, warnt Windows SmartScreen beim ersten Start („Weitere Informationen“, dann „Trotzdem ausführen“).
+**Windows:** Der Workflow baut bis auf Weiteres keinen Windows-Installer (siehe 3). Wer ihn braucht, baut ihn selbst unter Windows (3.2): `…_x64-setup.exe` (empfohlen) oder `…_x64_en-US.msi` aus `target/release/bundle/nsis/` beziehungsweise `msi/`. Da die Pakete nicht signiert sind, warnt Windows SmartScreen beim ersten Start („Weitere Informationen“, dann „Trotzdem ausführen“).
+
+### 4.1 Paketquelle einrichten (einmalig, für den Repository-Besitzer)
+
+Der Job `apt` des Workflows legt das Repository als Dateien auf den Branch `gh-pages`, GitHub Pages liefert sie aus. Dafür sind zwei einmalige Schritte nötig.
+
+**1. Signaturschlüssel anlegen.** Er signiert die Paketquelle, ohne ihn lehnt `apt` sie ab. Auf deinem Rechner (nicht im Repository speichern), der Schlüssel läuft nie ab und hat kein Passwort, damit der Workflow ihn ohne Eingabe nutzen kann:
+
+```bash
+export GNUPGHOME="$(mktemp -d)"
+```
+
+```bash
+gpg --batch --passphrase '' --quick-generate-key "BdB-Butler Paketquelle" ed25519 sign never
+```
+
+```bash
+gpg --armor --export-secret-keys "BdB-Butler Paketquelle"
+```
+
+Die Ausgabe des letzten Befehls (`-----BEGIN PGP PRIVATE KEY BLOCK-----` bis `END`) auf GitHub unter **Settings, Secrets and variables, Actions, New repository secret** als Secret `APT_GPG_PRIVATE_KEY` eintragen. Danach den temporären Ordner löschen (`rm -rf "$GNUPGHOME"`). Der öffentliche Schlüssel entsteht bei jedem Lauf neu aus dem geheimen und liegt als `bdb-butler.gpg` in der Paketquelle. Hat der Schlüssel doch ein Passwort, kommt es als Secret `APT_GPG_PASSPHRASE` dazu.
+
+**2. GitHub Pages einschalten.** Nach dem ersten erfolgreichen Lauf des Jobs `apt` existiert der Branch `gh-pages`. Auf GitHub unter **Settings, Pages**: Source **„Deploy from a branch“**, Branch `gh-pages`, Ordner `/ (root)`. Nach einer Minute ist <https://dennismarcbusch.github.io/bdb-butler/dists/stable/InRelease> erreichbar.
+
+Die Paketquelle wird bei jedem Release-Tag (`v*`) und bei jedem manuellen Lauf des Workflows auf `main` aktualisiert. Läufe von anderen Branches und Pull Requests rühren sie nicht an. Wird der Schlüssel ausgetauscht, müssen alle Rechner `bdb-butler.gpg` neu laden.
+
+Lokal ausprobieren lässt sich die Paketquelle mit `app/deploy/build-apt-repo.sh` (Aufruf steht im Kopf des Skripts).
 
 Die App legt ihre Daten in einem eigenen Ordner ab:
 
@@ -509,7 +561,7 @@ install -m 0755 bdbb-server /usr/local/bin/bdbb-server
 systemctl restart bdbb
 ```
 
-**App:** im Repository den neuen Stand holen und neu bauen (Abschnitt 3.2), dann das neue Paket installieren. Die Daten im Datenordner bleiben erhalten. Aktualisiere am besten alle Rechner zeitnah: Ein Rechner mit älterer App überspringt Einträge im neueren Format und meldet sie, bis er aktualisiert ist.
+**App über die apt-Paketquelle (Abschnitt 4):** `sudo apt update && sudo apt upgrade`. Ohne Paketquelle: im Repository den neuen Stand holen und neu bauen (Abschnitt 3.2), dann das neue Paket installieren. Die Daten im Datenordner bleiben erhalten. Aktualisiere am besten alle Rechner zeitnah: Ein Rechner mit älterer App überspringt Einträge im neueren Format und meldet sie, bis er aktualisiert ist.
 
 ## 12. Fehlersuche
 

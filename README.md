@@ -6,9 +6,9 @@ Desktop-App für die Arbeit als mBdB: Dienstreisen, Schulen und Ansprechpartner,
 - **Ende-zu-Ende verschlüsselt:** Ein kleiner Sync-Server verteilt die Daten zwischen den Rechnern, sieht aber nur Chiffretext.
 - **KI-Zugriff:** Ein lokaler MCP-Server in der App lässt eine KI (zum Beispiel Claude) Einträge suchen, anlegen und ändern. Personenbezogene Typen sind dabei gesperrt, bis du sie freigibst.
 
-Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Installer für Windows und Ubuntu baut GitHub Actions (Workflow „Bauen“, siehe [Abschnitt 3.0](docs/INSTALLATION.md#30-bauen-auf-github)).
+Installation und Betrieb: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**. Das deb-Paket für Ubuntu und Debian baut GitHub Actions (Workflow „Bauen“, siehe [Abschnitt 3.0](docs/INSTALLATION.md#30-bauen-auf-github)) und stellt es als apt-Paketquelle bereit ([Abschnitt 4](docs/INSTALLATION.md#4-app-installieren)). Windows-Installer, rpm und AppImage werden bis auf Weiteres nicht gebaut.
 
-**Download:** [Releases](https://github.com/dennismarcbusch/bdb-butler/releases) (Installer und Server-Datei, nach dem Veröffentlichen des Entwurfs) oder [Läufe des Workflows „Bauen“](https://github.com/dennismarcbusch/bdb-butler/actions/workflows/build.yml) (unten auf der Seite eines Laufs unter „Artifacts“).
+**Download:** [Releases](https://github.com/dennismarcbusch/bdb-butler/releases) (deb-Paket und Server-Datei, nach dem Veröffentlichen des Entwurfs) oder [Läufe des Workflows „Bauen“](https://github.com/dennismarcbusch/bdb-butler/actions/workflows/build.yml) (unten auf der Seite eines Laufs unter „Artifacts“).
 
 ## Inhalt
 

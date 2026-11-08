@@ -20,6 +20,18 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Dennis Busch",
+    "homepage": "https://github.com/dennismarcbusch/bdb-butler",
+    "category": "Productivity",
+    "shortDescription": "Dienstreisen, Schulen, Beratungen und Fortbildungen für die mBdB-Tätigkeit",
+    "longDescription": "Local-first, Ende-zu-Ende verschlüsselt: Dienstreisen, Schulen, Ansprechpartner, Beratungen, Protokolle, Auftragsbuch, Fortbildungen und Tätigkeitsbericht für die Tätigkeit als mBdB.",
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "replaces": ["bd-b-butler"],
+        "conflicts": ["bd-b-butler"]
+      }
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }
