@@ -1,12 +1,20 @@
-# Testet den BdB-Butler und baut die App für Windows und Ubuntu.
+# Testet den BdB-Butler und baut die App als deb-Paket für Ubuntu.
 #
 # - Bei jedem Push auf main und bei Pull Requests laufen nur die Tests.
-# - Bauen: auf der Seite "Actions" den Workflow "Bauen" wählen und "Run workflow" drücken. Die Installer liegen danach
-#   unten auf der Seite des Laufs unter "Artifacts".
-# - Release: Ein Tag wie v0.1.0 pushen. Dann wird gebaut und ein Release-Entwurf mit allen Installern und der
-#   Server-Datei angelegt, den du auf GitHub prüfst und veröffentlichst. Die Version im Tag sollte zu "version" in
-#   app/src-tauri/tauri.conf.json passen. Das Installationsskript für Alpine lädt den Server aus dem neuesten
-#   veröffentlichten Release (server/deploy/install-alpine.sh).
+# - Bauen: auf der Seite "Actions" den Workflow "Bauen" wählen und "Run workflow" drücken. Das deb-Paket liegt danach
+#   unten auf der Seite des Laufs unter "Artifacts". Läuft der Bau auf main, landet das Paket außerdem in der
+#   apt-Paketquelle (siehe unten).
+# - Release: Ein Tag wie v0.1.0 pushen. Dann wird gebaut, die apt-Paketquelle aktualisiert und ein Release-Entwurf mit
+#   dem deb-Paket und der Server-Datei angelegt, den du auf GitHub prüfst und veröffentlichst. Die Version im Tag
+#   sollte zu "version" in app/src-tauri/tauri.conf.json passen. Das Installationsskript für Alpine lädt den Server aus
+#   dem neuesten veröffentlichten Release (server/deploy/install-alpine.sh).
+# - apt-Paketquelle: Der Job "apt" legt ein signiertes apt-Repository auf dem Branch gh-pages ab, den GitHub Pages
+#   ausliefert (https://dennismarcbusch.github.io/bdb-butler/). Einmalig nötig: Secret APT_GPG_PRIVATE_KEY und
+#   Pages-Quelle "gh-pages", siehe docs/INSTALLATION.md, Abschnitt 4.1.
+# - Bis auf Weiteres gibt es nur deb-Pakete. Windows-Installer, rpm und AppImage sind abgeschaltet (das AppImage bringt
+#   WebKitGTK mit und ist sehr groß). Windows wieder einschalten: in der Matrix des Jobs "build" den Eintrag
+#   "Windows" (os: windows-latest) ergänzen, "--bundles deb" nur für Linux setzen und die Installer unter
+#   target/release/bundle/nsis und msi wieder in den Artifacts aufführen.
 name: Bauen
 
 on:
@@ -66,24 +74,15 @@ jobs:
           npm test
 
   build:
-    name: App bauen (${{ matrix.name }})
+    name: App bauen (Ubuntu, deb)
     needs: test
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-          # Ubuntu 22.04: Die Pakete laufen damit auch auf älteren Systemen (glibc), WebKitGTK 4.1 ist vorhanden.
-          - name: Ubuntu
-            os: ubuntu-22.04
-    runs-on: ${{ matrix.os }}
+    # Ubuntu 22.04: Das Paket läuft damit auch auf älteren Systemen (glibc), WebKitGTK 4.1 ist vorhanden.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
-      - name: Systembibliotheken für Tauri (Linux)
-        if: runner.os == 'Linux'
+      - name: Systembibliotheken für Tauri
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
@@ -92,7 +91,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: build-${{ matrix.os }}
+          key: build-ubuntu-22.04
 
       - uses: actions/setup-node@v7
         with:
@@ -100,23 +99,76 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      - name: App bauen
+      - name: App bauen (nur deb)
         working-directory: app
         run: |
           npm ci
-          npm run tauri build
+          npm run tauri build -- --bundles deb
 
-      - name: Installer bereitstellen
+      # Tauri nennt das Paket "bd-b-butler" (trennt "BdB" an jedem Buchstabenwechsel). Das Skript macht "bdb-butler" daraus.
+      - name: Paketnamen setzen
+        run: sh app/deploy/rename-deb.sh target/release/bundle/deb/*.deb
+
+      - name: Paket bereitstellen
         uses: actions/upload-artifact@v7
         with:
-          name: BdB-Butler-${{ matrix.name }}
+          name: BdB-Butler-Ubuntu
           if-no-files-found: error
-          path: |
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/msi/*.msi
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
-            target/release/bundle/appimage/*.AppImage
+          path: target/release/bundle/deb/*.deb
+
+  apt:
+    name: apt-Paketquelle aktualisieren
+    needs: build
+    # Nur Tags und manuelle Läufe auf main, damit kein Zwischenstand von einem anderen Branch in der Paketquelle landet.
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      # Zwei Läufe dürfen nicht gleichzeitig auf gh-pages schreiben.
+      group: apt-paketquelle
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: BdB-Butler-Ubuntu
+          path: debs
+
+      - name: Werkzeuge installieren
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils gnupg
+
+      - name: Bisherige Paketquelle holen
+        run: |
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$remote" gh-pages >/dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch gh-pages "$remote" site
+          else
+            mkdir site
+          fi
+
+      - name: Paketquelle erzeugen und signieren
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: sh app/deploy/build-apt-repo.sh debs site
+
+      - name: Auf gh-pages veröffentlichen
+        run: |
+          cd site
+          # Ohne Verlauf: Die Pakete sind Binärdateien, ein Verlauf würde das Repository nur aufblähen.
+          rm -rf .git
+          git init --quiet -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "apt-Paketquelle für ${GITHUB_REF_NAME}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
 
   server:
     name: Server bauen (Linux amd64 und arm64)
@@ -170,10 +222,8 @@ jobs:
           name: BdB-Butler ${{ github.ref_name }}
           files: dist/*
           body: |
-            Installer für Windows (`.exe` oder `.msi`) und Linux (`.deb`, `.rpm`, `.AppImage`).
+            Paket für Ubuntu und Debian (`.deb`). Einfacher zu installieren und zu aktualisieren ist die apt-Paketquelle (Abschnitt 4 der Anleitung).
 
             Sync-Server: `bdbb-server-linux-amd64` und `bdbb-server-linux-arm64` (statisch gebaut, Prüfsummen in `SHA256SUMS-server.txt`). Das Installationsskript für Alpine (`server/deploy/install-alpine.sh`) lädt sie aus dem neuesten veröffentlichten Release.
-
-            Die Installer sind nicht signiert. Windows SmartScreen warnt deshalb beim ersten Start: „Weitere Informationen“, dann „Trotzdem ausführen“.
 
             Einrichtung: siehe [docs/INSTALLATION.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALLATION.md).
